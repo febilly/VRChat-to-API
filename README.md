@@ -1,60 +1,62 @@
+[简体中文](README.cn.md)
+
 # VRChat-to-API
 
-把 VRChat 里的真人「变成」一个 OpenAI 兼容的 API。
+Turn a real human in VRChat into an OpenAI-compatible API.
 
-收到 `chat/completions` 请求后，取**最后一条 user 消息**通过 OSC 发到 VRChat 聊天框；
-然后用 Soniox 实时语音识别捕获（系统音频里）别人说的话，作为 API 的返回结果。
+Upon receiving a `chat/completions` request, it takes the **last user message** and sends it to the VRChat chatbox via OSC;
+It then captures the speech of other players (from the system audio) using Soniox real-time speech-to-text (STT) and returns it as the API response.
 
-## 工作流程
+## Workflow
 
 ```
 POST /v1/chat/completions
-  └─ 按需启动 STT 流 + 系统音频采集（不在请求间监听）
-     └─ 取最后一条 user 消息，分页 + 循环翻面发到 VRChat /chatbox/input
-        └─ 收集请求之后的 final 文本
-           └─ 结束判定：endpoint（含 <end> token）且静音≥min_silence
-              ；若 endpoint 始终不来，静音超过 fallback 秒也返回；上限 max_wait
-              └─ 流式：逐段回传已确认内容；非流式：汇总后一次返回
-                 └─ 请求结束后停止 STT 流 + 采集
+  └─ Start STT stream + system audio capture on demand (no listening between requests)
+     └─ Take the last user message, split into pages + cycle pages, send to VRChat /chatbox/input
+        └─ Collect "final" text after sending the message
+           └─ End condition: endpoint detected (containing '<end>' token) AND silence duration ≥ min_silence;
+              if endpoint is never detected, return when silence exceeds fallback seconds; capped at max_wait
+              └─ Streaming: push confirmed text chunk-by-chunk; Non-streaming: return the aggregated result at once
+                 └─ Stop STT stream + audio capture after the request is finished
 ```
 
-**按需监听**：只在处理请求时开流、采音，完事即停——请求之间不监听。
+**On-Demand Listening**: The STT stream and audio capture are only active while processing a request, and stop immediately afterward. No listening occurs between requests.
 
-## 安装
+## Installation
 
 ```powershell
 pip install -r requirements.txt
-copy .env.example .env   # 然后编辑 .env
+copy .env.example .env   # Then edit .env
 ```
 
-`.env` 至少要配 Soniox：填 `SONIOX_API_KEY`（永久 key）**或** `SONIOX_TEMP_KEY_URL`（临时 key ）。
+At minimum, `.env` needs to be configured with Soniox: fill in `SONIOX_API_KEY` (permanent key) **or** `SONIOX_TEMP_KEY_URL` (temporary key URL).
 
-## 运行
+## Running
 
-确保 VRChat 已开启 OSC（默认监听 `127.0.0.1:9000`）。
+Ensure OSC is enabled in VRChat (default listener is `127.0.0.1:9000`).
 
 ```powershell
 python main.py
 ```
 
-启动后服务在 `http://127.0.0.1:8080/v1`。
+Once started, the service runs at `http://127.0.0.1:8080/v1`.
 
-## 调用示例
+## Usage Examples
 
-非流式（curl）：
+Non-streaming (curl):
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" \
   -d '{"model":"vrchat-human","messages":[{"role":"user","content":"你好"}]}'
 ```
 
-流式：加 `"stream": true`，用 `curl -N` 观察逐段（已确认部分）输出。
+Streaming: Add `"stream": true` and use `curl -N` to observe the streaming (confirmed parts) output.
 
-OpenAI Python SDK：
+OpenAI Python SDK:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="不校验")
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="any-string")
 resp = client.chat.completions.create(
     model="vrchat-human",
     messages=[{"role": "user", "content": "在吗？"}],
@@ -62,44 +64,43 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
-任何兼容 OpenAI 的前端（SillyTavern 等）把 base_url 指过来即可。
+Any OpenAI-compatible frontend (such as SillyTavern) can be used by pointing its base URL to this server.
 
-## 音频源
+## Audio Sources
 
-- 默认 `AUDIO_SOURCE=system`：捕获系统音频回环（loopback），天然只录别人的声音（不含自己的麦克风）。
-- **只录 VRChat**：把 VRChat 的输出在 Windows「应用音量和设备首选项」里指到一个独立/虚拟输出设备
-  （如 VB-Cable），再设 `LOOPBACK_DEVICE_NAME=<设备名(可部分匹配)>`，即可只捕获该设备的音频。
-- 也支持 `microphone` / `mix`（见 `.env.example`）。
+- Default `AUDIO_SOURCE=system`: Captures system audio loopback. By default, this only records other people's voices (excluding your own microphone).
+- **Record VRChat Only**: In Windows "App volume and device preferences", route VRChat's output to an independent/virtual output device (e.g., VB-Cable), then set `LOOPBACK_DEVICE_NAME=<device name (partial match supported)>` to capture audio only from that specific device.
+- Also supports `microphone` / `mix` (see `.env.example` for details).
 
-## 回复结束判定
+## Reply End Determination
 
-一次请求的回复在**同时满足**「Soniox 端点检测」（端点信号包括 `endpoint_detected` 标志
-**或** `<end>` token）与「静音 ≥ `CAPTURE_MIN_SILENCE_SECONDS`」时结束。
+A reply for a request ends when **both** of the following conditions are met:
+1. **Soniox Endpoint Detection**: An endpoint signal is detected (which includes the `endpoint_detected` flag **or** the `<end>` token).
+2. **Silence Duration**: Silence lasts for at least `CAPTURE_MIN_SILENCE_SECONDS`.
 
-兜底：若 Soniox 始终不发端点（连续 loopback 噪声下可能发生），讲完后静音超过
-`CAPTURE_SILENCE_FALLBACK_SECONDS`（默认 4s）也会返回，避免一直干等到上限。
-最长等待 `CAPTURE_MAX_WAIT_SECONDS`，仍无人回复则返回 `CAPTURE_NO_REPLY_MESSAGE`。
+Fallback: If Soniox never sends an endpoint signal (which can happen under continuous loopback noise), the API will still return if silence exceeds `CAPTURE_SILENCE_FALLBACK_SECONDS` (default is 4s), preventing it from waiting indefinitely.
+The maximum wait time is capped at `CAPTURE_MAX_WAIT_SECONDS`. If there is still no reply, `CAPTURE_NO_REPLY_MESSAGE` will be returned.
 
-## 长消息聊天框轮播
+## Chatbox Carousel for Long Messages
 
-请求文本超过 VRChat 144 字上限时，按逗号/句号等断句符分页，在聊天框循环翻面播放，
-直到该请求的回复返回才停止并清空。每页停留 = `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` 秒。
+When the input request text exceeds the VRChat limit of 144 characters, it is paginated by punctuation marks (e.g., commas, periods) and displayed sequentially in a carousel loop.
+The loop stops and clears once the reply for the request starts returning. The duration for each page is calculated as: `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` seconds.
 
-## 文件结构
+## File Structure
 
-| 文件 | 作用 |
-|------|------|
-| `config.py` | 配置（env 读取） |
-| `soniox_client.py` | 临时/永久 key 获取 + STT config |
-| `audio_router.py` | 无缝轮转的音频路由 + 静音检测（移植） |
-| `audio_capture.py` | loopback / 麦克风 / 混音采集（移植） |
-| `stt_engine.py` | 常驻 STT 引擎 + 无缝流轮转 + 事件发布 |
-| `osc_sender.py` | OSC 聊天框发送 + 分页轮播 |
-| `capture.py` | 单次请求的回复捕获与结束判定 |
-| `api_server.py` | FastAPI OpenAI 兼容端点 |
-| `main.py` | 启动入口 |
+| File | Description / Role |
+|------|-------------|
+| `config.py` | Configuration (reads from environment variables) |
+| `soniox_client.py` | Temporary/Permanent key acquisition + STT configuration |
+| `audio_router.py` | Seamlessly rotated audio routing + silence detection (ported) |
+| `audio_capture.py` | Loopback / microphone / mix capture (ported) |
+| `stt_engine.py` | Persistent STT engine + seamless stream rotation + event publishing |
+| `osc_sender.py` | OSC chatbox sender + page carousel |
+| `capture.py` | Single-request reply capture and end determination |
+| `api_server.py` | FastAPI OpenAI-compatible endpoints |
+| `main.py` | Entry point |
 
-## 注意
+## Notes
 
-- `ten-vad` 为可选依赖（更准的静音检测），缺失时自动退化为能量检测，不影响功能。
-- 物理上只有一个真人，请求按全局锁串行处理。
+- `ten-vad` is an optional dependency (for more accurate voice activity detection). If it is missing, the system automatically falls back to energy-based silence detection, without affecting functionality.
+- Since physically there is only one real human, requests are processed serially using a global lock.

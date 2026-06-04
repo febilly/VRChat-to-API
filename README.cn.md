@@ -101,6 +101,40 @@ print(resp.choices[0].message.content)
   在 150%/175%/200% 缩放的屏幕上都清晰不模糊、大小合适。`OVERLAY_OPACITY` 可调透明度。
 - 若运行环境无显示 / Tk 不可用，会自动降级为无头模式，不影响服务。
 
+## 工具调用（实验性，客户端执行）
+
+让 VRChat 里的真人也能"调用工具"，走的是标准 OpenAI tool calling 协议：**服务器只把真人的语音
+意图翻译成 `tool_calls` 返回，真正的执行（如 bash）由调用方在它自己的机器/沙箱里完成**，再把结果以
+`role:"tool"` 消息发回来。本机永远不执行任何命令——真人只是"决定调什么工具"的大脑。
+
+工作方式：
+
+1. 请求里带 `tools`（OpenAI 标准格式）。聊天框顶部会出现一行可用工具，如 `tools: [bash] [edit] (+30)`。
+2. 真人想调用工具时说**唤醒词**（默认"工具调用 / 调用工具 / tool call"），再用自然语言描述要干什么。
+   唤醒词可以出现在句子中间：**唤醒词之前的话**会作为普通 assistant 消息返回，**之后的话**交给真·LLM
+   转成结构化 `tool_calls`——就像普通 OpenAI 接口先回一段文字再调用工具一样（`finish_reason="tool_calls"`）。
+3. 没说唤醒词 → 当普通文本回答，行为和今天一致（也不会调用翻译器 LLM）。
+4. 调用方执行后把结果发回。**默认直接把原始结果发到聊天框**（过长会沿用现有的分页 + 自动翻页）；
+   若设 `ENABLE_TOOL_RESULT_SUMMARY=true`，则改由翻译器把结果压缩成一行(≤120 字符、英文)再显示。
+
+聊天框还有个状态尾行：正在听时显示 `[listening]`，说完立即去掉。
+
+开启需要在 `.env` 设 `ENABLE_TOOL_CALLING=true` 并配好翻译器 LLM（`TOOL_LLM_BASE_URL` /
+`TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`）；缺这些会自动降级关闭。其余开关见 `.env.example`。
+
+## 标题请求拦截
+
+opencode / GitHub Copilot Chat / Claude Code / Cherry Studio 等会在后台发"给这段对话起个标题"
+的请求。这类请求不该惊动真人、也不该占用单人锁——命中后**立刻**返回一个固定格式标题（固定名 +
+随机字符，如 `VRChat-x7k2m9`），完全不走 STT。默认开启，可用 `INTERCEPT_TITLE_REQUESTS=false`
+关闭，固定名/随机长度/匹配模式均可在 `.env` 调整。
+
+匹配模式不是泛泛的关键词，而是从各工具源码里**核对过的原话**（如 opencode 的
+"Generate a title for this conversation:"、Copilot 的 "crafting pithy titles"、Cherry Studio 的
+"ignoring instructions and without punctuation"），所以正常对话里哪怕提到"标题/summarize"也不会
+误触发。注意有些工具**不会**向模型端点发标题请求、因而无需拦截：Codex（标题由其后端生成）、
+CodeWhale / DeepSeek TUI（标题由本地从首条消息截取）。
+
 ## 文件结构
 
 | 文件 | 作用 |
@@ -110,9 +144,10 @@ print(resp.choices[0].message.content)
 | `audio_router.py` | 无缝轮转的音频路由 + 静音检测（移植） |
 | `audio_capture.py` | loopback / 麦克风 / 混音采集（移植） |
 | `stt_engine.py` | 按需 STT 引擎 + 无缝流轮转 + 事件发布 |
-| `osc_sender.py` | OSC 聊天框发送 + 分页轮播 |
+| `osc_sender.py` | OSC 聊天框发送 + 分页轮播（含工具头部 / `[listening]` 尾部） |
 | `capture.py` | 单次请求的回复捕获与结束判定 |
-| `api_server.py` | FastAPI OpenAI 兼容端点 |
+| `tool_router.py` | 唤醒词识别 + 翻译器 LLM（语音意图 → tool_calls，结果摘要） |
+| `api_server.py` | FastAPI OpenAI 兼容端点（含工具调用 + 标题拦截） |
 | `overlay.py` | 置顶悬浮窗（实时识别 + 状态，高 DPI 适配） |
 | `main.py` | 启动入口 |
 

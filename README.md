@@ -101,6 +101,51 @@ The window is draggable; click `✕` (top-right) to close it (closing quits the 
 - **High-DPI aware**: the process declares DPI awareness and scales window size and fonts to the real DPI (96 = 100%), so it stays crisp and correctly sized at 150% / 175% / 200% display scaling. `OVERLAY_OPACITY` adjusts transparency.
 - If no display / Tk is unavailable, it falls back to headless automatically without affecting the server.
 
+## Tool Calling (experimental, client-executed)
+
+Lets the human in VRChat "call tools" via the standard OpenAI tool-calling protocol:
+**the server only translates the human's spoken intent into `tool_calls` and returns them; the
+actual execution (e.g. bash) happens on the caller's machine/sandbox**, with the result posted
+back as a `role:"tool"` message. Nothing is ever executed on this host — the human is just the
+"brain" deciding which tool to call.
+
+How it works:
+
+1. Send `tools` in the request (standard OpenAI format). A tools line appears atop the chatbox,
+   e.g. `tools: [bash] [edit] (+30)`.
+2. To call a tool, the human says a **wake word** (default `工具调用` / `调用工具` / `tool call`),
+   then describes the intent in natural language. The wake word may appear **mid-sentence**: text
+   before it is returned as a normal assistant message, and text after it is translated by a real
+   LLM into structured `tool_calls` — just like a normal OpenAI turn that emits a message and then a
+   tool call (`finish_reason="tool_calls"`).
+3. No wake word → returned as plain text, exactly as before (and the translator LLM isn't called).
+4. After the caller executes and returns the result, the server sends it to the chatbox. **By
+   default the raw result text is sent as-is** (long results are paged + auto-cycled like any long
+   prompt); set `ENABLE_TOOL_RESULT_SUMMARY=true` to instead have the translator condense it into a
+   single line (≤120 chars, English).
+
+The chatbox also shows a status footer: `[listening]` while capturing, removed the moment the
+human stops.
+
+Enable with `ENABLE_TOOL_CALLING=true` plus a translator LLM (`TOOL_LLM_BASE_URL` /
+`TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`); missing config auto-disables it. See `.env.example`.
+
+## Title-Request Interception
+
+Agent tools (opencode, GitHub Copilot Chat, Claude Code, Cherry Studio, ...) fire background
+"generate a title for this conversation" requests. These shouldn't bother the human or tie up the
+single-human lock, so a matched request **instantly** returns a canned title (fixed name + random
+chars, e.g. `VRChat-x7k2m9`) without any STT. On by default; disable with
+`INTERCEPT_TITLE_REQUESTS=false`. Name, random length, and match patterns are all configurable in
+`.env`.
+
+Match patterns are not generic keywords but the **exact phrases verified from each tool's source**
+(e.g. opencode's "Generate a title for this conversation:", Copilot's "crafting pithy titles",
+Cherry Studio's "ignoring instructions and without punctuation"), so normal conversation that merely
+mentions "title"/"summarize" won't trigger. Some tools send **no** title request to the model
+endpoint — nothing to intercept: Codex (generated server-side) and CodeWhale / DeepSeek TUI (derived
+locally from the first user message).
+
 ## File Structure
 
 | File | Description / Role |
@@ -110,9 +155,10 @@ The window is draggable; click `✕` (top-right) to close it (closing quits the 
 | `audio_router.py` | Seamlessly rotated audio routing + silence detection (ported) |
 | `audio_capture.py` | Loopback / microphone / mix capture (ported) |
 | `stt_engine.py` | On-demand STT engine + seamless stream rotation + event publishing |
-| `osc_sender.py` | OSC chatbox sender + page carousel |
+| `osc_sender.py` | OSC chatbox sender + page carousel (with tools header / `[listening]` footer) |
 | `capture.py` | Single-request reply capture and end determination |
-| `api_server.py` | FastAPI OpenAI-compatible endpoints |
+| `tool_router.py` | Wake-word match + translator LLM (voice intent → tool_calls, result summary) |
+| `api_server.py` | FastAPI OpenAI-compatible endpoints (incl. tool calling + title interception) |
 | `overlay.py` | Always-on-top overlay window (live recognition + status) |
 | `main.py` | Entry point |
 

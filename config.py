@@ -159,6 +159,85 @@ OVERLAY_OPACITY = min(1.0, max(0.3, _env_float("OVERLAY_OPACITY", 0.92)))
 
 
 # ----------------------------------------------------------------------------
+# Tool calling (client-executed, OpenAI standard protocol)
+# ----------------------------------------------------------------------------
+# When enabled, a spoken reply containing a wake word is translated (by a real
+# OpenAI-compatible LLM) into structured tool_calls and returned to the caller,
+# which executes the tool on ITS side and posts the result back. bash is never
+# executed on this host — the human is just the "brain" deciding tools.
+ENABLE_TOOL_CALLING = _env_bool("ENABLE_TOOL_CALLING", False)
+
+# Spoken wake words that switch a reply into "tool call" mode (comma-separated).
+# The wake word may appear anywhere in the sentence: text before it is returned
+# as a normal assistant message, text after it becomes the tool-call intent.
+_WAKE_RAW = _env_str("TOOL_WAKE_WORDS", "工具调用,调用工具,tool call")
+TOOL_WAKE_WORDS = [w.strip() for w in _WAKE_RAW.split(",") if w.strip()]
+
+# Translator LLM (OpenAI-compatible) used to turn the post-wake-word natural
+# language into a structured tool_call, and to summarize tool results for the
+# human to read in the chatbox.
+TOOL_LLM_BASE_URL = _env_str("TOOL_LLM_BASE_URL", "").strip().rstrip("/")
+TOOL_LLM_API_KEY = _env_str("TOOL_LLM_API_KEY", "").strip()
+TOOL_LLM_MODEL = _env_str("TOOL_LLM_MODEL", "").strip()
+TOOL_LLM_TIMEOUT = max(1.0, _env_float("TOOL_LLM_TIMEOUT", 20.0))
+# tool_choice sent to the translator. "auto" works everywhere (including
+# DeepSeek thinking mode, which rejects "required"). Set "required" only if your
+# model supports forcing a tool call.
+TOOL_LLM_TOOL_CHOICE = _env_str("TOOL_LLM_TOOL_CHOICE", "auto").strip() or "auto"
+
+# When the caller posts a tool result back, optionally summarize it (via the
+# translator LLM) into a short line for the human. Off by default: the raw tool
+# result text is sent to the chatbox as-is.
+ENABLE_TOOL_RESULT_SUMMARY = _env_bool("ENABLE_TOOL_RESULT_SUMMARY", False)
+
+# Graceful degrade: tool calling needs a translator endpoint to work.
+if ENABLE_TOOL_CALLING and not (TOOL_LLM_BASE_URL and TOOL_LLM_MODEL):
+    print(
+        "⚠️  ENABLE_TOOL_CALLING is set but TOOL_LLM_BASE_URL / TOOL_LLM_MODEL "
+        "are incomplete; disabling tool calling."
+    )
+    ENABLE_TOOL_CALLING = False
+
+
+# ----------------------------------------------------------------------------
+# Title-request interception
+# ----------------------------------------------------------------------------
+# Agent clients (GitHub Copilot, opencode, Claude Code, Codex, ...) fire
+# background "generate a title for this conversation" requests. Routing those to
+# a real human is pointless and ties up the single-human lock, so when a request
+# matches a known title-generation pattern we instantly return a canned title
+# (fixed name + random chars) without touching STT.
+INTERCEPT_TITLE_REQUESTS = _env_bool("INTERCEPT_TITLE_REQUESTS", True)
+TITLE_TEXT = _env_str("TITLE_TEXT", "VRChat").strip() or "VRChat"
+TITLE_RANDOM_LEN = max(0, _env_int("TITLE_RANDOM_LEN", 6))
+
+# Tool-specific title-generation prompts, verified against each tool's source.
+# Kept deliberately narrow (exact phrases these tools send) so normal spoken
+# conversation never matches. None of these substrings contain a comma.
+#   - opencode     : sst/opencode  session/agent title prompt
+#   - Copilot      : microsoft/vscode-copilot-chat  TitlePrompt
+#   - Claude Code  : title + new-topic detection prompts (per Wei-Shaw/sub2api)
+#   - Cherry Studio: CherryHQ/cherry-studio  TopicNamingService FALLBACK_PROMPT
+# Tools that DON'T send a title request to the model endpoint (so nothing to
+# intercept): Codex (title generated server-side) and CodeWhale / DeepSeek TUI
+# (Hmbown/CodeWhale derives the title locally from the first user message).
+_TITLE_PATTERNS_DEFAULT = (
+    "you are a title generator,"               # opencode (system)
+    "generate a title for this conversation,"  # opencode (user)
+    "crafting pithy titles,"                    # copilot chat (system)
+    "please write a brief title for the following request,"  # copilot chat (user)
+    "please write a 5-10 word title for the following conversation,"  # claude code (user)
+    "indicates a new conversation topic,"      # claude code topic detect (system)
+    "extract a 2-3 word title,"                 # claude code topic detect (system)
+    "ignoring instructions and without punctuation"  # cherry studio (system)
+)
+_TITLE_PATTERNS_RAW = _env_str("TITLE_REQUEST_PATTERNS", _TITLE_PATTERNS_DEFAULT)
+TITLE_REQUEST_PATTERNS = [
+    p.strip().lower() for p in _TITLE_PATTERNS_RAW.split(",") if p.strip()
+]
+
+
+# ----------------------------------------------------------------------------
 # Hard validation
 # ----------------------------------------------------------------------------
 if not os.environ.get("SONIOX_API_KEY") and not SONIOX_TEMP_KEY_URL:
@@ -178,5 +257,7 @@ def describe() -> str:
         f"audio={AUDIO_SOURCE}"
         + (f"(device={LOOPBACK_DEVICE_NAME})" if LOOPBACK_DEVICE_NAME else "")
         + f", rollover={rollover}, diarization={ENABLE_SPEAKER_DIARIZATION}, "
-        f"min_silence={CAPTURE_MIN_SILENCE_SECONDS}s, max_wait={CAPTURE_MAX_WAIT_SECONDS}s"
+        f"min_silence={CAPTURE_MIN_SILENCE_SECONDS}s, max_wait={CAPTURE_MAX_WAIT_SECONDS}s, "
+        f"tools={'on' if ENABLE_TOOL_CALLING else 'off'}, "
+        f"title_intercept={'on' if INTERCEPT_TITLE_REQUESTS else 'off'}"
     )

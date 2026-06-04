@@ -26,6 +26,8 @@ from config import (
     TOOL_LLM_MODEL,
     TOOL_LLM_TIMEOUT,
     TOOL_LLM_TOOL_CHOICE,
+    CONTINUE_TOOL_NAME,
+    CONTINUE_STOP_WORDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,6 +181,96 @@ def match_wake_word(transcript: str) -> tuple[str, str] | None:
     if found is None:
         return None
     return split_intent(transcript, *found)
+
+
+# ----------------------------------------------------------------------------
+# continue loop (no-op tool call to keep an agent's tool loop alive)
+# ----------------------------------------------------------------------------
+def contains_stop_word(text: str) -> bool:
+    """True when the transcript contains a loop-breaking stop word."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(word.lower() in lowered for word in CONTINUE_STOP_WORDS)
+
+
+def _is_continue_name(name: str) -> bool:
+    """Match the continue tool by exact name or by an agent-applied prefix.
+
+    Agents often namespace MCP tools (e.g. opencode exposes a server's tool as
+    ``<server>_<tool>``), so match the bare name or any ``*_<tool>`` suffix.
+    """
+    if not name:
+        return False
+    return name == CONTINUE_TOOL_NAME or name.endswith("_" + CONTINUE_TOOL_NAME)
+
+
+def resolve_continue_tool_name(tools: list) -> str:
+    """Find the continue tool's *advertised* name in the caller's tools list.
+
+    Agents namespace MCP tools (e.g. opencode exposes the server's tool as
+    ``<server>_continue_session``). We must emit the exact name the agent knows
+    or it can't execute the call, so prefer the advertised name; fall back to the
+    configured bare name when the tool isn't in the list.
+    """
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") or {}
+        name = fn.get("name") or tool.get("name") or ""
+        if _is_continue_name(name):
+            return name
+    return CONTINUE_TOOL_NAME
+
+
+def make_continue_call(name: str = CONTINUE_TOOL_NAME) -> dict:
+    """A well-formed, no-argument tool_call invoking the continue tool."""
+    return {
+        "id": "call_" + uuid.uuid4().hex[:24],
+        "type": "function",
+        "function": {"name": name or CONTINUE_TOOL_NAME, "arguments": "{}"},
+    }
+
+
+def is_continue_tool_result(messages: list) -> bool:
+    """True when the trailing tool message(s) answer a continue_session call.
+
+    Looks up the function names of the most recent assistant ``tool_calls`` and
+    checks whether the trailing ``role:"tool"`` results belong to the continue
+    tool, so we re-prompt the human instead of relaying the no-op output.
+    """
+    if not messages or messages[-1].get("role") != "tool":
+        return False
+
+    # Names of the most recent assistant tool_calls, keyed by call id.
+    id_to_name: dict[str, str] = {}
+    last_call_names: list[str] = []
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for call in msg["tool_calls"]:
+                fn = (call or {}).get("function") or {}
+                name = fn.get("name") or ""
+                if call.get("id"):
+                    id_to_name[call["id"]] = name
+                last_call_names.append(name)
+            break
+
+    # Trailing tool results.
+    for msg in reversed(messages):
+        if msg.get("role") != "tool":
+            break
+        call_id = msg.get("tool_call_id")
+        if call_id and call_id in id_to_name:
+            if _is_continue_name(id_to_name[call_id]):
+                return True
+        elif msg.get("name") and _is_continue_name(msg["name"]):
+            # Some clients echo the tool name on the result message itself.
+            return True
+
+    # Fallback: no id linkage, but the only call made was the continue tool.
+    if not id_to_name and last_call_names:
+        return all(_is_continue_name(n) for n in last_call_names)
+    return False
 
 
 # ----------------------------------------------------------------------------

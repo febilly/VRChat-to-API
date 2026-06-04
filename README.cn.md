@@ -122,6 +122,33 @@ print(resp.choices[0].message.content)
 开启需要在 `.env` 设 `ENABLE_TOOL_CALLING=true` 并配好翻译器 LLM（`TOOL_LLM_BASE_URL` /
 `TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`）；缺这些会自动降级关闭。其余开关见 `.env.example`。
 
+## 持续循环（让 agent 跨语音轮次一直转下去）
+
+opencode（以及 Claude Code、Codex 等）这类 agent 都跑一个**工具循环**：调用模型，只要模型回的是
+`tool_calls` 就执行、再调模型，如此往复；一旦模型回的是**纯文本**，本轮就结束、把控制权交还给**打字的**
+用户。于是真人正常说一句话（纯文本）就会让 agent 在每句话后停下。
+
+开启持续循环后，纯文本的语音回复会被改成一个 `tool_calls` 回复：既带上真人说的话作为 content，又附带一个
+对无副作用空操作工具 `continue_session` 的调用。agent 执行这个空操作、把 `role:"tool"` 发回来，服务器就在
+聊天框里**重新提示真人说下一步**——形成一个**无限的、由真人节奏驱动的循环**。真人说一个**停止词**（默认
+"结束循环 / 停止循环 / 结束对话 / exit loop / stop loop"）即可跳出：那一轮回成纯文本，agent 本轮正常结束。
+
+```
+真人说话 ─▶ 服务器 ─▶ assistant{content, tool_calls:[continue_session]}
+    ▲                                │
+    │                                ▼
+聊天框："（继续）请说下一步"  ◀─ 服务器 ◀─ agent 执行 continue_session → role:"tool":"continue"
+```
+
+这个空操作工具必须注册到你的 agent 里，它才有东西可执行。它就在
+[`mcp_continue_session/`](./mcp_continue_session/) ——一个**零依赖**的 MCP（stdio）服务器；opencode（及
+其它 agent）的配置方式见该目录下的 `README.md`。服务器会从每次请求的 `tools` 列表里**自动识别 agent 实际
+暴露的工具名**（如 opencode 的 `vrchat-continue_continue_session`），无需手动对名字。
+
+在 `.env` 设 `ENABLE_CONTINUE_LOOP=true` 开启。无论上面的**工具调用**是否开启它都能用（continue 调用不带参数，
+不经过翻译器 LLM）。安全性：某一轮没采到任何语音时**不会**发 continue 调用，所以空房间会让循环自然结束、而不是
+空转。可用 `.env` 里的 `CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` 调整。
+
 ## 标题请求拦截
 
 opencode / GitHub Copilot Chat / Claude Code / Cherry Studio 等会在后台发"给这段对话起个标题"
@@ -146,10 +173,11 @@ CodeWhale / DeepSeek TUI（标题由本地从首条消息截取）。
 | `stt_engine.py` | 按需 STT 引擎 + 无缝流轮转 + 事件发布 |
 | `osc_sender.py` | OSC 聊天框发送 + 分页轮播（含工具头部 / `[listening]` 尾部） |
 | `capture.py` | 单次请求的回复捕获与结束判定 |
-| `tool_router.py` | 唤醒词识别 + 翻译器 LLM（语音意图 → tool_calls，结果摘要） |
-| `api_server.py` | FastAPI OpenAI 兼容端点（含工具调用 + 标题拦截） |
+| `tool_router.py` | 唤醒词识别 + 翻译器 LLM（语音意图 → tool_calls，结果摘要）+ 持续循环辅助函数 |
+| `api_server.py` | FastAPI OpenAI 兼容端点（含工具调用 + 持续循环 + 标题拦截） |
 | `overlay.py` | 置顶悬浮窗（实时识别 + 状态，高 DPI 适配） |
 | `main.py` | 启动入口 |
+| `mcp_continue_session/` | 独立零依赖 MCP 空操作工具（`continue_session`），供持续循环使用 + 配置说明 |
 
 ## 注意
 

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vrchat-continue": {
+      "type": "local",
+      "command": [
+        "python",
+        "C:\\Users\\hsxxs\\Desktop\\STT\\VRChat-to-API\\mcp_continue_session\\server.py"
+      ],
+      "enabled": true
+    }
+  }
+}

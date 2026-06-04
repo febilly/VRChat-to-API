@@ -200,6 +200,36 @@ if ENABLE_TOOL_CALLING and not (TOOL_LLM_BASE_URL and TOOL_LLM_MODEL):
 
 
 # ----------------------------------------------------------------------------
+# Continue loop (keep an agent's tool loop alive across spoken turns)
+# ----------------------------------------------------------------------------
+# A plain text reply (no tool call) ends an agent's turn — the client stops and
+# waits for the *typed* user. To let the human keep driving by voice instead,
+# this feature turns a normal text reply into a tool_calls reply that invokes a
+# harmless no-op tool (continue_session). The agent executes that tool, posts a
+# role:"tool" result back, and we re-prompt the human for the next turn — an
+# infinite, human-paced loop. The human breaks out by speaking a stop word.
+#
+# Requires the standalone no-op MCP tool (see ./mcp_continue_session/) to be
+# registered with the agent so it can actually execute continue_session. The
+# translator LLM is NOT needed for this (the call takes no arguments), so it
+# works with ENABLE_TOOL_CALLING on or off.
+ENABLE_CONTINUE_LOOP = _env_bool("ENABLE_CONTINUE_LOOP", False)
+
+# Name of the no-op tool to invoke. Must match the tool exposed by the MCP
+# server (and the prefix the agent gives it, if any — see the folder README).
+CONTINUE_TOOL_NAME = _env_str("CONTINUE_TOOL_NAME", "continue_session").strip() or "continue_session"
+
+# Spoken phrases that BREAK the loop: when the reply contains one, it is returned
+# as plain text (ending the agent's turn) instead of a continue call.
+_STOP_RAW = _env_str("CONTINUE_STOP_WORDS", "结束循环,停止循环,结束对话,exit loop,stop loop")
+CONTINUE_STOP_WORDS = [w.strip() for w in _STOP_RAW.split(",") if w.strip()]
+
+# Chatbox prompt shown when the loop comes back around (after the no-op tool
+# result) to ask the human for the next turn.
+CONTINUE_PROMPT = _env_str("CONTINUE_PROMPT", "（继续）请说下一步，或说“结束循环”停止").strip()
+
+
+# ----------------------------------------------------------------------------
 # Title-request interception
 # ----------------------------------------------------------------------------
 # Agent clients (GitHub Copilot, opencode, Claude Code, Codex, ...) fire
@@ -259,5 +289,6 @@ def describe() -> str:
         + f", rollover={rollover}, diarization={ENABLE_SPEAKER_DIARIZATION}, "
         f"min_silence={CAPTURE_MIN_SILENCE_SECONDS}s, max_wait={CAPTURE_MAX_WAIT_SECONDS}s, "
         f"tools={'on' if ENABLE_TOOL_CALLING else 'off'}, "
+        f"loop={'on' if ENABLE_CONTINUE_LOOP else 'off'}, "
         f"title_intercept={'on' if INTERCEPT_TITLE_REQUESTS else 'off'}"
     )

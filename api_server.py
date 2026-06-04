@@ -32,6 +32,8 @@ from config import (
     ENGINE_START_TIMEOUT_SECONDS,
     ENABLE_TOOL_CALLING,
     ENABLE_TOOL_RESULT_SUMMARY,
+    ENABLE_CONTINUE_LOOP,
+    CONTINUE_PROMPT,
     INTERCEPT_TITLE_REQUESTS,
     TITLE_TEXT,
     TITLE_RANDOM_LEN,
@@ -47,6 +49,10 @@ from tool_router import (
     translate_intent,
     summarize_tool_results,
     tool_results_text,
+    contains_stop_word,
+    make_continue_call,
+    resolve_continue_tool_name,
+    is_continue_tool_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -312,17 +318,27 @@ async def chat_completions(request: Request):
             return StreamingResponse(title_stream(), media_type="text/event-stream")
         return JSONResponse(_completion_payload(model, title, cid, created))
 
-    # --- Tool calling setup ------------------------------------------------
+    # --- Tool calling / continue-loop setup --------------------------------
     tools = body.get("tools") or []
     tool_choice = body.get("tool_choice")
     tools_enabled = bool(ENABLE_TOOL_CALLING and tools and tool_choice != "none")
+    loop_enabled = bool(ENABLE_CONTINUE_LOOP)
+    # "interactive" = a reply may become a tool_calls turn (wake-word translation
+    # and/or a continue_session no-op call), so the human reply must be inspected.
+    interactive = tools_enabled or loop_enabled
+    # Emit the continue tool under the exact name the agent advertises it as.
+    continue_tool_name = resolve_continue_tool_name(tools) if loop_enabled else ""
     loop = asyncio.get_running_loop()
 
-    # Chatbox prompt: when the caller returns tool results, relay them to the
-    # human — summarized if enabled, otherwise the raw text (long results are
-    # paged + auto-cycled by the rotator just like any long prompt). Otherwise
-    # send the last user message as before.
-    if messages and messages[-1].get("role") == "tool":
+    # Chatbox prompt selection:
+    #   - continue-loop result: the no-op tool just looped us back, so re-prompt
+    #     the human for the next turn (don't relay the "continue" no-op output).
+    #   - other tool results: relay them to the human — summarized if enabled,
+    #     else the raw text (long results are paged + auto-cycled by the rotator).
+    #   - otherwise: send the last user message as before.
+    if loop_enabled and is_continue_tool_result(messages):
+        prompt = CONTINUE_PROMPT
+    elif messages and messages[-1].get("role") == "tool":
         if ENABLE_TOOL_RESULT_SUMMARY:
             prompt = await asyncio.to_thread(summarize_tool_results, messages)
         else:
@@ -333,31 +349,63 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=400, detail="no user message found")
 
     header = format_tools_header(tools) if tools_enabled else ""
-    footer = "[listening]" if tools_enabled else ""
+    footer = "[listening]" if interactive else ""
 
     logger.info(
-        "Request -> chatbox: %r (stream=%s, tools=%s)", prompt[:80], stream, tools_enabled
+        "Request -> chatbox: %r (stream=%s, tools=%s, loop=%s)",
+        prompt[:80], stream, tools_enabled, loop_enabled,
     )
+
+    def _should_continue(text: str) -> bool:
+        """Whether a text-only reply should loop back via a continue call.
+
+        True only when the loop is on, the human actually said something other
+        than a stop word, and it wasn't the "no reply" sentinel (so an empty room
+        ends the loop instead of spinning forever).
+        """
+        clean = (text or "").strip()
+        return bool(
+            loop_enabled
+            and clean
+            and clean != CAPTURE_NO_REPLY_MESSAGE
+            and not contains_stop_word(text)
+        )
+
+    def _maybe_continue(text: str) -> dict:
+        """Wrap a plain text reply in a continue_session call to keep the loop.
+
+        With the continue loop on, a text-only reply (which would otherwise end
+        the agent's turn) becomes a tool_calls reply carrying the spoken text as
+        content plus a no-op continue call.
+        """
+        if _should_continue(text):
+            return {
+                "type": "tool_calls",
+                "tool_calls": [make_continue_call(continue_tool_name)],
+                "content": text or None,
+            }
+        return {"type": "text", "content": text}
 
     async def _decide(text: str) -> dict:
         """Turn a buffered transcript into a text or tool_calls decision.
 
         A wake word may appear mid-sentence: text before it becomes the
         assistant's message (returned alongside the tool call, like a normal
-        OpenAI turn), text after it becomes the tool-call intent.
+        OpenAI turn), text after it becomes the tool-call intent. A text-only
+        reply is routed through the continue loop (a no-op if it's disabled).
         """
-        match = match_wake_word(text)
-        if match is None:
-            return {"type": "text", "content": text}
-        preamble, intent = match
-        decision = await asyncio.to_thread(translate_intent, intent, tools)
-        if decision["type"] == "tool_calls":
-            decision["content"] = preamble
-            return decision
-        # No tool call produced; fold the preamble back into the text reply.
-        tail = decision.get("content", "")
-        combined = f"{preamble} {tail}".strip() if preamble else tail
-        return {"type": "text", "content": combined}
+        if tools_enabled:
+            match = match_wake_word(text)
+            if match is not None:
+                preamble, intent = match
+                decision = await asyncio.to_thread(translate_intent, intent, tools)
+                if decision["type"] == "tool_calls":
+                    decision["content"] = preamble
+                    return decision
+                # No tool call produced; fold the preamble back into the text.
+                tail = decision.get("content", "")
+                text = f"{preamble} {tail}".strip() if preamble else tail
+        return _maybe_continue(text)
 
     async def _stream_decision(capture, rotator):
         """Stream the human reply live, switching to tool-call buffering only
@@ -379,6 +427,11 @@ async def chat_completions(request: Request):
 
         async for delta in capture.stream():
             full += delta
+            if not tools_enabled:
+                # Loop-only mode: no wake words to watch for, stream everything.
+                yield ("content", delta)
+                emitted = len(full)
+                continue
             if found is None:
                 found = find_wake_word(full)
                 if found is None:
@@ -399,11 +452,20 @@ async def chat_completions(request: Request):
         # ASR done: drop the [listening] footer right away (before translation).
         rotator.set_footer("")
 
+        # Terminal: a text-only reply either ends the turn or — with the loop on —
+        # loops back via a no-op continue call (content stays as the streamed
+        # text). A real wake-word tool call already keeps the agent looping.
+        terminal = (
+            ("tool_calls", [make_continue_call(continue_tool_name)])
+            if _should_continue(full)
+            else ("stop", None)
+        )
+
         if found is None:
             # No wake word at all: flush the held-back tail as the final text.
             if len(full) > emitted:
                 yield ("content", full[emitted:])
-            yield ("stop", None)
+            yield terminal
             return
 
         _, intent = split_intent(full, *found)
@@ -414,7 +476,7 @@ async def chat_completions(request: Request):
             tail = decision.get("content", "")
             if tail:
                 yield ("content", tail)
-            yield ("stop", None)
+            yield terminal
 
     if stream:
         async def event_stream():
@@ -436,9 +498,10 @@ async def chat_completions(request: Request):
 
                 yield _chunk(cid, created, model, {"role": "assistant"}, None)
 
-                if tools_enabled:
+                if interactive:
                     # Stream the preamble live; only the post-wake-word intent is
-                    # buffered and translated into an (atomic) tool call.
+                    # buffered and translated into an (atomic) tool call. With the
+                    # continue loop on, a text-only reply ends with a no-op call.
                     content_parts: list[str] = []
                     tcs = None
                     async for kind, data in _stream_decision(capture, rotator):
@@ -486,7 +549,7 @@ async def chat_completions(request: Request):
         decision: dict = {"type": "text", "content": ""}
         try:
             text = await capture.wait_complete()
-            if tools_enabled:
+            if interactive:
                 rotator.set_footer("")  # ASR done: drop [listening]
                 decision = await _decide(text)
             else:

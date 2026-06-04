@@ -130,6 +130,39 @@ human stops.
 Enable with `ENABLE_TOOL_CALLING=true` plus a translator LLM (`TOOL_LLM_BASE_URL` /
 `TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`); missing config auto-disables it. See `.env.example`.
 
+## Continue Loop (keep an agent looping across spoken turns)
+
+Agents like **opencode** (also Claude Code, Codex, …) run a *tool loop*: they call the model, and
+as long as the model answers with `tool_calls` they execute them and call the model again. A
+**plain text** answer ends the turn and hands control back to the *typed* user — so a normal spoken
+reply would stop the agent after every sentence.
+
+With the continue loop on, a text-only spoken reply is instead returned as a `tool_calls` reply that
+carries the spoken text **plus** a call to a harmless no-op tool, `continue_session`. The agent
+executes that tool, posts `role:"tool"` back, and the server re-prompts the human in the chatbox for
+the next turn — an **infinite, human-paced loop**. The human breaks out by speaking a **stop word**
+(default `结束循环` / `停止循环` / `结束对话` / `exit loop` / `stop loop`), which returns plain text
+again and ends the agent's turn.
+
+```
+human speaks ─▶ server ─▶ assistant{content, tool_calls:[continue_session]}
+     ▲                                   │
+     │                                   ▼
+ chatbox: "（继续）请说下一步"  ◀─ server ◀─ agent executes continue_session → role:"tool":"continue"
+```
+
+The no-op tool must be registered with your agent so it has something real to execute. It ships in
+[`mcp_continue_session/`](./mcp_continue_session/) — a **zero-dependency** MCP (stdio) server; see
+that folder's `README.md` for opencode (and other agents') setup. The server auto-detects the
+agent-advertised tool name (e.g. opencode's `vrchat-continue_continue_session`) from each request's
+`tools` list, so no name wiring is needed.
+
+Enable with `ENABLE_CONTINUE_LOOP=true`. It works whether or not voice **Tool Calling** above is on
+(the continue call takes no arguments, so the translator LLM isn't involved). Safety: a turn that
+captures no speech does **not** issue a continue call, so an empty room ends the loop instead of
+spinning forever. Configurable via `CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT`
+in `.env`.
+
 ## Title-Request Interception
 
 Agent tools (opencode, GitHub Copilot Chat, Claude Code, Cherry Studio, ...) fire background
@@ -157,10 +190,11 @@ locally from the first user message).
 | `stt_engine.py` | On-demand STT engine + seamless stream rotation + event publishing |
 | `osc_sender.py` | OSC chatbox sender + page carousel (with tools header / `[listening]` footer) |
 | `capture.py` | Single-request reply capture and end determination |
-| `tool_router.py` | Wake-word match + translator LLM (voice intent → tool_calls, result summary) |
-| `api_server.py` | FastAPI OpenAI-compatible endpoints (incl. tool calling + title interception) |
+| `tool_router.py` | Wake-word match + translator LLM (voice intent → tool_calls, result summary) + continue-loop helpers |
+| `api_server.py` | FastAPI OpenAI-compatible endpoints (incl. tool calling + continue loop + title interception) |
 | `overlay.py` | Always-on-top overlay window (live recognition + status) |
 | `main.py` | Entry point |
+| `mcp_continue_session/` | Standalone zero-dependency MCP no-op tool (`continue_session`) for the continue loop + setup docs |
 
 ## Notes
 

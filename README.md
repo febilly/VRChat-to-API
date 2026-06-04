@@ -86,6 +86,18 @@ The maximum wait time is capped at `CAPTURE_MAX_WAIT_SECONDS`. If there is still
 When the input request text exceeds the VRChat limit of 144 characters, it is paginated by punctuation marks (e.g., commas, periods) and displayed sequentially in a carousel loop.
 The loop stops and clears once the reply for the request starts returning. The duration for each page is calculated as: `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` seconds.
 
+## Floating Overlay Window
+
+On startup an always-on-top overlay window (Tkinter, no extra deps) shows in real time:
+
+- **Status**: `● 监听中` (green) / `● 空闲` (gray) — whether it is currently listening
+- **发送 (Sent)**: the message sent to the VRChat chatbox for this request
+- **识别 (Recognition)**: live transcription (confirmed text in white, the tentative hypothesis in gray)
+- **回复 (Reply)**: the final content returned for the request (marked ⏹ when an endpoint was detected)
+
+The window is draggable; click `✕` (top-right) to close it (closing quits the app).
+Set `SHOW_OVERLAY=false` to run fully headless.
+
 ## File Structure
 
 | File | Description / Role |
@@ -94,10 +106,11 @@ The loop stops and clears once the reply for the request starts returning. The d
 | `soniox_client.py` | Temporary/Permanent key acquisition + STT configuration |
 | `audio_router.py` | Seamlessly rotated audio routing + silence detection (ported) |
 | `audio_capture.py` | Loopback / microphone / mix capture (ported) |
-| `stt_engine.py` | Persistent STT engine + seamless stream rotation + event publishing |
+| `stt_engine.py` | On-demand STT engine + seamless stream rotation + event publishing |
 | `osc_sender.py` | OSC chatbox sender + page carousel |
 | `capture.py` | Single-request reply capture and end determination |
 | `api_server.py` | FastAPI OpenAI-compatible endpoints |
+| `overlay.py` | Always-on-top overlay window (live recognition + status) |
 | `main.py` | Entry point |
 
 ## Notes

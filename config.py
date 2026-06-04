@@ -152,6 +152,13 @@ MODEL_NAME = _env_str("MODEL_NAME", "vrchat-human")
 
 
 # ----------------------------------------------------------------------------
+# Floating overlay window (always-on-top live recognition + status)
+# ----------------------------------------------------------------------------
+SHOW_OVERLAY = _env_bool("SHOW_OVERLAY", True)
+OVERLAY_OPACITY = min(1.0, max(0.3, _env_float("OVERLAY_OPACITY", 0.92)))
+
+
+# ----------------------------------------------------------------------------
 # Hard validation
 # ----------------------------------------------------------------------------
 if not os.environ.get("SONIOX_API_KEY") and not SONIOX_TEMP_KEY_URL:

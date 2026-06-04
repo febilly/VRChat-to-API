@@ -38,13 +38,24 @@ app = FastAPI(title="VRChat-to-API")
 
 _engine = None
 _sender = None
+_status_cb = None
 _request_lock = asyncio.Lock()
 
 
-def configure(engine, sender) -> None:
-    global _engine, _sender
+def configure(engine, sender, status_cb=None) -> None:
+    global _engine, _sender, _status_cb
     _engine = engine
     _sender = sender
+    _status_cb = status_cb
+
+
+def _emit_status(event: dict) -> None:
+    """Push a UI status event (request_start / request_end) to the overlay, if any."""
+    if _status_cb is not None:
+        try:
+            _status_cb(event)
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------------
@@ -189,6 +200,8 @@ async def chat_completions(request: Request):
         async def event_stream():
             await _request_lock.acquire()
             capture = rotator = None
+            _emit_status({"type": "request_start", "prompt": prompt})
+            reply_parts: list[str] = []
             try:
                 capture, rotator = await _begin_listening(prompt, loop)
                 if capture is None:
@@ -200,6 +213,7 @@ async def chat_completions(request: Request):
                     return
                 yield _chunk(cid, created, model, {"role": "assistant"}, None)
                 async for delta in capture.stream():
+                    reply_parts.append(delta)
                     yield _chunk(cid, created, model, {"content": delta}, None)
                 yield _chunk(cid, created, model, {}, "stop")
                 yield "data: [DONE]\n\n"
@@ -207,6 +221,7 @@ async def chat_completions(request: Request):
                 # Nested finally: release the lock no matter what (even if the
                 # task is cancelled when the client disconnects after [DONE]).
                 try:
+                    _emit_status({"type": "request_end", "reply": "".join(reply_parts)})
                     _end_listening(capture, rotator)
                 finally:
                     _request_lock.release()
@@ -214,13 +229,17 @@ async def chat_completions(request: Request):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     async with _request_lock:
+        _emit_status({"type": "request_start", "prompt": prompt})
+        text = ""
         capture, rotator = await _begin_listening(prompt, loop)
         if capture is None:
+            _emit_status({"type": "request_end", "reply": ""})
             reason = getattr(_engine, "last_disconnect_reason", None) or "timeout"
             raise HTTPException(status_code=503, detail=f"STT stream failed to start: {reason}")
         try:
             text = await capture.wait_complete()
         finally:
+            _emit_status({"type": "request_end", "reply": text})
             _end_listening(capture, rotator)
 
     logger.info("Reply <- VRChat: %r", text[:80])

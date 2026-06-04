@@ -85,6 +85,7 @@ The maximum wait time is capped at `CAPTURE_MAX_WAIT_SECONDS`. If there is still
 
 When the input request text exceeds the VRChat limit of 144 characters, it is paginated by punctuation marks (e.g., commas, periods) and displayed sequentially in a carousel loop.
 The loop stops and clears once the reply for the request starts returning. The duration for each page is calculated as: `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` seconds.
+While ASR is listening, the current chatbox frame is re-sent at least every `CHATBOX_KEEPALIVE_SECONDS` seconds (default 20, capped at 20) so VRChat does not hide it as stale.
 
 ## Floating Overlay Window
 
@@ -148,7 +149,7 @@ again and ends the agent's turn.
 human speaks ─▶ server ─▶ assistant{content, tool_calls:[continue_session]}
      ▲                                   │
      │                                   ▼
- chatbox: "（继续）请说下一步"  ◀─ server ◀─ agent executes continue_session → role:"tool":"continue"
+ chatbox: "Please continue:\n[Original prompt]"  ◀─ server ◀─ agent executes continue_session → role:"tool":"continue"
 ```
 
 The no-op tool must be registered with your agent so it has something real to execute. It ships in
@@ -158,10 +159,12 @@ agent-advertised tool name (e.g. opencode's `vrchat-continue_continue_session`) 
 `tools` list, so no name wiring is needed.
 
 Enable with `ENABLE_CONTINUE_LOOP=true`. It works whether or not voice **Tool Calling** above is on
-(the continue call takes no arguments, so the translator LLM isn't involved). Safety: a turn that
-captures no speech does **not** issue a continue call, so an empty room ends the loop instead of
-spinning forever. Configurable via `CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT`
-in `.env`.
+(the continue call takes no arguments, so the translator LLM isn't involved). By default, a turn
+that times out with no speech still issues a continue call so the voice loop stays alive; set
+`CONTINUE_ON_TIMEOUT=false` if an empty room should end the loop. Configurable via
+`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` / `CONTINUE_ON_TIMEOUT` in `.env`.
+After `continue_session` returns, the chatbox prompt includes the original user prompt below
+`CONTINUE_PROMPT`, so the human keeps the initial context while driving later turns.
 
 ## Title-Request Interception
 

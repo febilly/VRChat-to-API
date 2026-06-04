@@ -128,6 +128,9 @@ CHATBOX_CJK_CPS = max(0.1, _env_float("CHATBOX_CJK_CPS", 6.0))
 CHATBOX_LATIN_CPS = max(0.1, _env_float("CHATBOX_LATIN_CPS", 15.0))
 CHATBOX_MIN_PAGE_SECONDS = max(1.5, _env_float("CHATBOX_MIN_PAGE_SECONDS", 3.0))
 CHATBOX_MAX_PAGE_SECONDS = _env_optional_float("CHATBOX_MAX_PAGE_SECONDS")  # optional cap
+# While ASR is listening, VRChat can hide stale chatbox messages. Re-send the
+# current frame at least this often; values above 20s are capped to 20s.
+CHATBOX_KEEPALIVE_SECONDS = min(20.0, max(1.0, _env_float("CHATBOX_KEEPALIVE_SECONDS", 20.0)))
 
 
 # ----------------------------------------------------------------------------
@@ -226,7 +229,11 @@ CONTINUE_STOP_WORDS = [w.strip() for w in _STOP_RAW.split(",") if w.strip()]
 
 # Chatbox prompt shown when the loop comes back around (after the no-op tool
 # result) to ask the human for the next turn.
-CONTINUE_PROMPT = _env_str("CONTINUE_PROMPT", "（继续）请说下一步，或说“结束循环”停止").strip()
+CONTINUE_PROMPT = _env_str("CONTINUE_PROMPT", "Please continue:").strip()
+
+# If a continue-loop turn hits the capture timeout with no speech, keep the
+# loop alive by default instead of ending the agent's turn.
+CONTINUE_ON_TIMEOUT = _env_bool("CONTINUE_ON_TIMEOUT", True)
 
 
 # ----------------------------------------------------------------------------

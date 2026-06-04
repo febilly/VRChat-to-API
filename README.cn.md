@@ -84,6 +84,7 @@ print(resp.choices[0].message.content)
 
 请求文本超过 VRChat 144 字上限时，按逗号/句号等断句符分页，在聊天框循环翻面播放，
 直到该请求的回复返回才停止并清空。每页停留 = `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` 秒。
+ASR 正在听时会至少每 `CHATBOX_KEEPALIVE_SECONDS` 秒重发当前聊天框画面一次（默认 20，超过 20 会按 20 处理），避免消息因超时隐藏。
 
 ## 悬浮窗口
 
@@ -137,7 +138,7 @@ opencode（以及 Claude Code、Codex 等）这类 agent 都跑一个**工具循
 真人说话 ─▶ 服务器 ─▶ assistant{content, tool_calls:[continue_session]}
     ▲                                │
     │                                ▼
-聊天框："（继续）请说下一步"  ◀─ 服务器 ◀─ agent 执行 continue_session → role:"tool":"continue"
+聊天框："Please continue:\n[Original prompt]"  ◀─ 服务器 ◀─ agent 执行 continue_session → role:"tool":"continue"
 ```
 
 这个空操作工具必须注册到你的 agent 里，它才有东西可执行。它就在
@@ -146,8 +147,10 @@ opencode（以及 Claude Code、Codex 等）这类 agent 都跑一个**工具循
 暴露的工具名**（如 opencode 的 `vrchat-continue_continue_session`），无需手动对名字。
 
 在 `.env` 设 `ENABLE_CONTINUE_LOOP=true` 开启。无论上面的**工具调用**是否开启它都能用（continue 调用不带参数，
-不经过翻译器 LLM）。安全性：某一轮没采到任何语音时**不会**发 continue 调用，所以空房间会让循环自然结束、而不是
-空转。可用 `.env` 里的 `CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` 调整。
+不经过翻译器 LLM）。默认情况下，某一轮超时且没采到任何语音时仍会发 continue 调用，让语音循环保持存活；
+如果希望空房间超时后结束循环，设 `CONTINUE_ON_TIMEOUT=false`。可用 `.env` 里的
+`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` / `CONTINUE_ON_TIMEOUT` 调整。
+`continue_session` 返回后，聊天框会在 `CONTINUE_PROMPT` 下方附带原始 user prompt，方便后续回合保留最初上下文。
 
 ## 标题请求拦截
 

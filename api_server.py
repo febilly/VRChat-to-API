@@ -34,6 +34,7 @@ from config import (
     ENABLE_TOOL_RESULT_SUMMARY,
     ENABLE_CONTINUE_LOOP,
     CONTINUE_PROMPT,
+    CONTINUE_ON_TIMEOUT,
     INTERCEPT_TITLE_REQUESTS,
     TITLE_TEXT,
     TITLE_RANDOM_LEN,
@@ -63,6 +64,8 @@ _engine = None
 _sender = None
 _status_cb = None
 _request_lock = asyncio.Lock()
+
+TOOL_CALL_HINT = 'Say "tool call" + what to do.'
 
 
 def configure(engine, sender, status_cb=None) -> None:
@@ -131,6 +134,20 @@ def _make_title() -> str:
     alphabet = string.ascii_lowercase + string.digits
     suffix = "".join(random.choices(alphabet, k=TITLE_RANDOM_LEN))
     return f"{TITLE_TEXT}-{suffix}"
+
+
+def _tool_chatbox_header(tools: list) -> str:
+    """Header shown above the prompt when callable tools are available."""
+    tools_line = format_tools_header(tools) or "tools available"
+    return f"{tools_line}\n{TOOL_CALL_HINT}"
+
+
+def _continue_prompt(messages: list) -> str:
+    """Prompt shown when the continue-loop asks for the next spoken turn."""
+    original_prompt = _last_user_message(messages)
+    if not original_prompt:
+        return CONTINUE_PROMPT
+    return f"{CONTINUE_PROMPT}\n{original_prompt}"
 
 
 def _completion_id() -> str:
@@ -337,7 +354,7 @@ async def chat_completions(request: Request):
     #     else the raw text (long results are paged + auto-cycled by the rotator).
     #   - otherwise: send the last user message as before.
     if loop_enabled and is_continue_tool_result(messages):
-        prompt = CONTINUE_PROMPT
+        prompt = _continue_prompt(messages)
     elif messages and messages[-1].get("role") == "tool":
         if ENABLE_TOOL_RESULT_SUMMARY:
             prompt = await asyncio.to_thread(summarize_tool_results, messages)
@@ -348,7 +365,7 @@ async def chat_completions(request: Request):
     if not prompt:
         raise HTTPException(status_code=400, detail="no user message found")
 
-    header = format_tools_header(tools) if tools_enabled else ""
+    header = _tool_chatbox_header(tools) if tools_enabled else ""
     footer = "[listening]" if interactive else ""
 
     logger.info(
@@ -359,16 +376,16 @@ async def chat_completions(request: Request):
     def _should_continue(text: str) -> bool:
         """Whether a text-only reply should loop back via a continue call.
 
-        True only when the loop is on, the human actually said something other
-        than a stop word, and it wasn't the "no reply" sentinel (so an empty room
-        ends the loop instead of spinning forever).
+        True only when the loop is on, the reply has content, the human didn't
+        say a stop word, and timeout/no-reply behavior allows continuing.
         """
         clean = (text or "").strip()
+        if not (loop_enabled and clean):
+            return False
+        if clean == CAPTURE_NO_REPLY_MESSAGE and not CONTINUE_ON_TIMEOUT:
+            return False
         return bool(
-            loop_enabled
-            and clean
-            and clean != CAPTURE_NO_REPLY_MESSAGE
-            and not contains_stop_word(text)
+            not contains_stop_word(text)
         )
 
     def _maybe_continue(text: str) -> dict:

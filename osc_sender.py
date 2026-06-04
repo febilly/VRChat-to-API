@@ -21,6 +21,7 @@ from config import (
     CHATBOX_LATIN_CPS,
     CHATBOX_MIN_PAGE_SECONDS,
     CHATBOX_MAX_PAGE_SECONDS,
+    CHATBOX_KEEPALIVE_SECONDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,8 +179,21 @@ class ChatboxRotator:
                 with self._lock:
                     self._current_page = page
                     footer = self._footer
-                self._sender.send_chatbox(self._frame(page, footer))
-                self._stop_event.wait(estimate_page_seconds(page))
+                frame = self._frame(page, footer)
+                self._sender.send_chatbox(frame)
+
+                deadline = time.monotonic() + estimate_page_seconds(page)
+                while not self._stop_event.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    wait_seconds = min(remaining, CHATBOX_KEEPALIVE_SECONDS)
+                    if self._stop_event.wait(wait_seconds):
+                        return
+                    if deadline - time.monotonic() > 0:
+                        with self._lock:
+                            footer = self._footer
+                        self._sender.send_chatbox(self._frame(page, footer))
 
     def set_footer(self, footer: str) -> None:
         """Update the footer line and re-send the current page right away."""

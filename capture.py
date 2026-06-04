@@ -40,6 +40,11 @@ class CaptureSession:
         self._lock = threading.Lock()
         self._final_parts: list[str] = []
         self._last_final_at: float | None = None
+        # Tracks the most recent recognizer activity — finals AND changing
+        # partials — so in-progress (non-finalized) speech also resets the
+        # silence timer instead of only confirmed tokens.
+        self._last_activity_at: float | None = None
+        self._last_partial_text = ""
         self._endpoint_seen = False
 
         self._delta_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -71,11 +76,25 @@ class CaptureSession:
             text = event.get("text", "")
             if not text:
                 return
+            now = time.monotonic()
             with self._lock:
                 self._final_parts.append(text)
-                self._last_final_at = time.monotonic()
+                self._last_final_at = now
+                self._last_activity_at = now
             # Hand the confirmed delta to the event loop thread.
             self._loop.call_soon_threadsafe(self._delta_queue.put_nowait, text)
+        elif etype == "partial":
+            text = event.get("text", "")
+            if not text:
+                return
+            # A changed partial means the recognizer is still hearing speech;
+            # treat it as activity so trailing-silence completion doesn't fire
+            # mid-utterance. Identical re-emits (a stuck pending hypothesis
+            # during an actual pause) are ignored so completion can still occur.
+            with self._lock:
+                if text != self._last_partial_text:
+                    self._last_partial_text = text
+                    self._last_activity_at = time.monotonic()
         elif etype == "endpoint":
             with self._lock:
                 self._endpoint_seen = True
@@ -83,10 +102,13 @@ class CaptureSession:
     # -- completion ---------------------------------------------------------
     def _is_complete(self) -> bool:
         with self._lock:
-            # Need at least some speech before we can complete.
+            # Need at least some confirmed speech before we can complete.
             if self._last_final_at is None:
                 return False
-            silence = time.monotonic() - self._last_final_at
+            # Silence is measured from the last recognizer activity (final or
+            # changing partial), so non-finalized speech also holds completion.
+            last_activity = self._last_activity_at or self._last_final_at
+            silence = time.monotonic() - last_activity
             # Primary: endpoint detected AND enough trailing silence.
             if self._endpoint_seen and silence >= self._min_silence:
                 return True

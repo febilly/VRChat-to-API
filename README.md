@@ -96,7 +96,10 @@ On startup an always-on-top overlay window (Tkinter, no extra deps) shows in rea
 - **回复 (Reply)**: the final content returned for the request (marked ⏹ when an endpoint was detected)
 
 The window is draggable; click `✕` (top-right) to close it (closing quits the app).
-Set `SHOW_OVERLAY=false` to run fully headless.
+
+- **Toggle**: set `SHOW_OVERLAY=false` in `.env` to disable the window and run fully headless; unset or `true` shows it by default.
+- **High-DPI aware**: the process declares DPI awareness and scales window size and fonts to the real DPI (96 = 100%), so it stays crisp and correctly sized at 150% / 175% / 200% display scaling. `OVERLAY_OPACITY` adjusts transparency.
+- If no display / Tk is unavailable, it falls back to headless automatically without affecting the server.
 
 ## File Structure
 

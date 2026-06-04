@@ -85,6 +85,22 @@ print(resp.choices[0].message.content)
 请求文本超过 VRChat 144 字上限时，按逗号/句号等断句符分页，在聊天框循环翻面播放，
 直到该请求的回复返回才停止并清空。每页停留 = `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` 秒。
 
+## 悬浮窗口
+
+启动后默认弹出一个**置顶悬浮窗**（Tkinter，无需额外依赖），实时显示：
+
+- **状态**：`● 监听中`（绿）/ `● 空闲`（灰）——是否正在听
+- **发送**：本次发到 VRChat 聊天框的消息
+- **识别**：实时识别结果（已确认为白色，临时假设为灰色）
+- **回复**：本次请求最终返回的内容（端点检测命中时带 ⏹ 标记）
+
+窗口可拖动，点右上角 `✕` 关闭（关闭即退出程序）。
+
+- **开关**：在 `.env` 里设 `SHOW_OVERLAY=false` 即可关闭窗口、纯无头运行；不设或为 true 则默认显示。
+- **高 DPI 适配**：自动声明进程 DPI 感知，并按真实 DPI（96=100%）缩放窗口尺寸与字体，
+  在 150%/175%/200% 缩放的屏幕上都清晰不模糊、大小合适。`OVERLAY_OPACITY` 可调透明度。
+- 若运行环境无显示 / Tk 不可用，会自动降级为无头模式，不影响服务。
+
 ## 文件结构
 
 | 文件 | 作用 |
@@ -93,10 +109,11 @@ print(resp.choices[0].message.content)
 | `soniox_client.py` | 临时/永久 key 获取 + STT config |
 | `audio_router.py` | 无缝轮转的音频路由 + 静音检测（移植） |
 | `audio_capture.py` | loopback / 麦克风 / 混音采集（移植） |
-| `stt_engine.py` | 常驻 STT 引擎 + 无缝流轮转 + 事件发布 |
+| `stt_engine.py` | 按需 STT 引擎 + 无缝流轮转 + 事件发布 |
 | `osc_sender.py` | OSC 聊天框发送 + 分页轮播 |
 | `capture.py` | 单次请求的回复捕获与结束判定 |
 | `api_server.py` | FastAPI OpenAI 兼容端点 |
+| `overlay.py` | 置顶悬浮窗（实时识别 + 状态，高 DPI 适配） |
 | `main.py` | 启动入口 |
 
 ## 注意

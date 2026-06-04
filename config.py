@@ -132,6 +132,44 @@ CHATBOX_MAX_PAGE_SECONDS = _env_optional_float("CHATBOX_MAX_PAGE_SECONDS")  # op
 # current frame at least this often; values above 20s are capped to 20s.
 CHATBOX_KEEPALIVE_SECONDS = min(20.0, max(1.0, _env_float("CHATBOX_KEEPALIVE_SECONDS", 20.0)))
 
+# OSC chatbox template language: english (default), chinese, or rotate.
+_OSC_TEMPLATE_LANGUAGE_RAW = _env_str("OSC_TEMPLATE_LANGUAGE", "english").strip().lower()
+_OSC_TEMPLATE_LANGUAGE_ALIASES = {
+    "en": "english",
+    "eng": "english",
+    "english": "english",
+    "zh": "chinese",
+    "cn": "chinese",
+    "chs": "chinese",
+    "zh-cn": "chinese",
+    "chinese": "chinese",
+    "rotate": "rotate",
+    "rotating": "rotate",
+    "alternate": "rotate",
+    "alternating": "rotate",
+}
+OSC_TEMPLATE_LANGUAGE = _OSC_TEMPLATE_LANGUAGE_ALIASES.get(_OSC_TEMPLATE_LANGUAGE_RAW, "english")
+if OSC_TEMPLATE_LANGUAGE != _OSC_TEMPLATE_LANGUAGE_RAW and _OSC_TEMPLATE_LANGUAGE_RAW not in _OSC_TEMPLATE_LANGUAGE_ALIASES:
+    print(f"⚠️  Invalid OSC_TEMPLATE_LANGUAGE: {_OSC_TEMPLATE_LANGUAGE_RAW}, fallback to: english")
+
+# OSC chatbox template copy. Both languages remain configurable even when the
+# active language is fixed, so switching OSC_TEMPLATE_LANGUAGE does not require
+# rewriting template text.
+OSC_TOOLS_LABEL_EN = _env_str("OSC_TOOLS_LABEL_EN", "tools").strip() or "tools"
+OSC_TOOLS_LABEL_ZH = _env_str("OSC_TOOLS_LABEL_ZH", "工具").strip() or "工具"
+OSC_TOOLS_AVAILABLE_EN = _env_str("OSC_TOOLS_AVAILABLE_EN", "tools available").strip() or "tools available"
+OSC_TOOLS_AVAILABLE_ZH = _env_str("OSC_TOOLS_AVAILABLE_ZH", "可用工具").strip() or "可用工具"
+OSC_TOOL_HINT_EN = (
+    _env_str("OSC_TOOL_HINT_EN", 'Say "tool call" + what to do.').strip()
+    or 'Say "tool call" + what to do.'
+)
+OSC_TOOL_HINT_ZH = (
+    _env_str("OSC_TOOL_HINT_ZH", "说“工具调用”加上要做的事。").strip()
+    or "说“工具调用”加上要做的事。"
+)
+OSC_LISTENING_FOOTER_EN = _env_str("OSC_LISTENING_FOOTER_EN", "[listening]").strip()
+OSC_LISTENING_FOOTER_ZH = _env_str("OSC_LISTENING_FOOTER_ZH", "[正在听]").strip()
+
 
 # ----------------------------------------------------------------------------
 # Reply capture (when does the spoken reply "finish")
@@ -228,8 +266,14 @@ _STOP_RAW = _env_str("CONTINUE_STOP_WORDS", "结束循环,停止循环,结束对
 CONTINUE_STOP_WORDS = [w.strip() for w in _STOP_RAW.split(",") if w.strip()]
 
 # Chatbox prompt shown when the loop comes back around (after the no-op tool
-# result) to ask the human for the next turn.
-CONTINUE_PROMPT = _env_str("CONTINUE_PROMPT", "Please continue:").strip()
+# result) to ask the human for the next turn. CONTINUE_PROMPT remains as a
+# backward-compatible alias for the English copy.
+CONTINUE_PROMPT_EN = (
+    _env_str("CONTINUE_PROMPT_EN", _env_str("CONTINUE_PROMPT", "Please continue:")).strip()
+    or "Please continue:"
+)
+CONTINUE_PROMPT_ZH = _env_str("CONTINUE_PROMPT_ZH", "请继续：").strip() or "请继续："
+CONTINUE_PROMPT = CONTINUE_PROMPT_EN
 
 # If a continue-loop turn hits the capture timeout with no speech, keep the
 # loop alive by default instead of ending the agent's turn.

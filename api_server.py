@@ -33,8 +33,18 @@ from config import (
     ENABLE_TOOL_CALLING,
     ENABLE_TOOL_RESULT_SUMMARY,
     ENABLE_CONTINUE_LOOP,
-    CONTINUE_PROMPT,
+    CONTINUE_PROMPT_EN,
+    CONTINUE_PROMPT_ZH,
     CONTINUE_ON_TIMEOUT,
+    OSC_TEMPLATE_LANGUAGE,
+    OSC_TOOLS_LABEL_EN,
+    OSC_TOOLS_LABEL_ZH,
+    OSC_TOOLS_AVAILABLE_EN,
+    OSC_TOOLS_AVAILABLE_ZH,
+    OSC_TOOL_HINT_EN,
+    OSC_TOOL_HINT_ZH,
+    OSC_LISTENING_FOOTER_EN,
+    OSC_LISTENING_FOOTER_ZH,
     INTERCEPT_TITLE_REQUESTS,
     TITLE_TEXT,
     TITLE_RANDOM_LEN,
@@ -65,7 +75,19 @@ _sender = None
 _status_cb = None
 _request_lock = asyncio.Lock()
 
-TOOL_CALL_HINT = 'Say "tool call" + what to do.'
+
+def _osc_template(en: str, zh: str):
+    if OSC_TEMPLATE_LANGUAGE == "chinese":
+        return zh
+    if OSC_TEMPLATE_LANGUAGE == "rotate":
+        return (en, zh)
+    return en
+
+
+def _osc_template_for_log(value) -> str:
+    if isinstance(value, tuple):
+        return value[0] if value else ""
+    return value
 
 
 def configure(engine, sender, status_cb=None) -> None:
@@ -136,18 +158,25 @@ def _make_title() -> str:
     return f"{TITLE_TEXT}-{suffix}"
 
 
-def _tool_chatbox_header(tools: list) -> str:
+def _tool_chatbox_header(tools: list):
     """Header shown above the prompt when callable tools are available."""
-    tools_line = format_tools_header(tools) or "tools available"
-    return f"{tools_line}\n{TOOL_CALL_HINT}"
+    tools_line_en = format_tools_header(tools, label=OSC_TOOLS_LABEL_EN) or OSC_TOOLS_AVAILABLE_EN
+    tools_line_zh = format_tools_header(tools, label=OSC_TOOLS_LABEL_ZH) or OSC_TOOLS_AVAILABLE_ZH
+    return _osc_template(
+        f"{tools_line_en}\n{OSC_TOOL_HINT_EN}",
+        f"{tools_line_zh}\n{OSC_TOOL_HINT_ZH}",
+    )
 
 
-def _continue_prompt(messages: list) -> str:
+def _continue_prompt(messages: list):
     """Prompt shown when the continue-loop asks for the next spoken turn."""
     original_prompt = _last_user_message(messages)
     if not original_prompt:
-        return CONTINUE_PROMPT
-    return f"{CONTINUE_PROMPT}\n{original_prompt}"
+        return _osc_template(CONTINUE_PROMPT_EN, CONTINUE_PROMPT_ZH)
+    return _osc_template(
+        f"{CONTINUE_PROMPT_EN}\n{original_prompt}",
+        f"{CONTINUE_PROMPT_ZH}\n{original_prompt}",
+    )
 
 
 def _completion_id() -> str:
@@ -245,7 +274,7 @@ def _new_capture(loop: asyncio.AbstractEventLoop) -> CaptureSession:
 
 
 async def _begin_listening(
-    prompt: str,
+    prompt,
     loop: asyncio.AbstractEventLoop,
     *,
     header: str = "",
@@ -365,12 +394,13 @@ async def chat_completions(request: Request):
     if not prompt:
         raise HTTPException(status_code=400, detail="no user message found")
 
+    prompt_for_log = _osc_template_for_log(prompt)
     header = _tool_chatbox_header(tools) if tools_enabled else ""
-    footer = "[listening]" if interactive else ""
+    footer = _osc_template(OSC_LISTENING_FOOTER_EN, OSC_LISTENING_FOOTER_ZH) if interactive else ""
 
     logger.info(
         "Request -> chatbox: %r (stream=%s, tools=%s, loop=%s)",
-        prompt[:80], stream, tools_enabled, loop_enabled,
+        prompt_for_log[:80], stream, tools_enabled, loop_enabled,
     )
 
     def _should_continue(text: str) -> bool:
@@ -499,7 +529,7 @@ async def chat_completions(request: Request):
         async def event_stream():
             await _request_lock.acquire()
             capture = rotator = None
-            _emit_status({"type": "request_start", "prompt": prompt})
+            _emit_status({"type": "request_start", "prompt": prompt_for_log})
             status_reply = ""
             try:
                 capture, rotator = await _begin_listening(
@@ -557,7 +587,7 @@ async def chat_completions(request: Request):
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     async with _request_lock:
-        _emit_status({"type": "request_start", "prompt": prompt})
+        _emit_status({"type": "request_start", "prompt": prompt_for_log})
         capture, rotator = await _begin_listening(prompt, loop, header=header, footer=footer)
         if capture is None:
             _emit_status({"type": "request_end", "reply": ""})

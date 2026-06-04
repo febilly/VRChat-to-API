@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import logging
+from collections.abc import Sequence
 
 from pythonosc.udp_client import SimpleUDPClient
 
@@ -25,6 +26,8 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+TextVariants = str | Sequence[str]
 
 # Sentence/clause boundaries used to split long prompts into pages.
 _SPLIT_AFTER = "，。,.；;！？!?、\n"
@@ -86,6 +89,17 @@ def split_into_pages(text: str, max_len: int = CHATBOX_MAX_LENGTH) -> list[str]:
     return pages
 
 
+def _as_variants(value: TextVariants) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    variants = tuple(str(v) for v in value)
+    return variants or ("",)
+
+
+def _variant(values: tuple[str, ...], index: int) -> str:
+    return values[index % len(values)]
+
+
 class OscSender:
     """Thin OSC client for the VRChat chatbox."""
 
@@ -104,7 +118,7 @@ class OscSender:
         self.send_chatbox("", notify=False)
 
 
-def format_tools_header(tools: list, max_named: int = 2) -> str:
+def format_tools_header(tools: list, max_named: int = 2, label: str = "tools") -> str:
     """Build a compact 'tools: [bash] [edit] (+30)' header from a tools list."""
     names: list[str] = []
     for tool in tools or []:
@@ -117,7 +131,7 @@ def format_tools_header(tools: list, max_named: int = 2) -> str:
     if not names:
         return ""
     shown = names[:max_named]
-    header = "tools: " + " ".join(f"[{n}]" for n in shown)
+    header = f"{label}: " + " ".join(f"[{n}]" for n in shown)
     extra = len(names) - len(shown)
     if extra > 0:
         header += f" (+{extra})"
@@ -133,31 +147,61 @@ class ChatboxRotator:
     re-sends the current page immediately (no need to wait out the page dwell).
     """
 
-    def __init__(self, sender: OscSender, text: str, *, header: str = "", footer: str = ""):
+    def __init__(
+        self,
+        sender: OscSender,
+        text: TextVariants,
+        *,
+        header: TextVariants = "",
+        footer: TextVariants = "",
+    ):
         self._sender = sender
-        self._header = header or ""
-        self._footer = footer or ""
-        # Reserve room for header + (initial) footer lines so each frame fits.
-        # The footer only ever shrinks during a request, so this stays safe.
-        reserve = 0
-        if self._header:
-            reserve += len(self._header) + 1
-        if self._footer:
-            reserve += len(self._footer) + 1
-        budget = max(1, CHATBOX_MAX_LENGTH - reserve)
-        self._pages = split_into_pages(text, budget)
-        if not self._pages and (self._header or self._footer):
-            # Header/footer with empty body still deserves a frame.
-            self._pages = [""]
-        self._current_page = self._pages[0] if self._pages else ""
+        self._headers = _as_variants(header)
+        self._footers = _as_variants(footer)
+        self._texts = _as_variants(text)
+        self._variant_count = max(len(self._headers), len(self._footers), len(self._texts))
+
+        self._pages_by_variant: list[list[str]] = []
+        for i in range(self._variant_count):
+            header_variant = _variant(self._headers, i)
+            footer_variant = _variant(self._footers, i)
+            text_variant = _variant(self._texts, i)
+            # Reserve room for header + (initial) footer lines so each frame fits.
+            # The footer only ever shrinks during a request, so this stays safe.
+            reserve = 0
+            if header_variant:
+                reserve += len(header_variant) + 1
+            if footer_variant:
+                reserve += len(footer_variant) + 1
+            budget = max(1, CHATBOX_MAX_LENGTH - reserve)
+            pages = split_into_pages(text_variant, budget)
+            if not pages and (header_variant or footer_variant):
+                # Header/footer with empty body still deserves a frame.
+                pages = [""]
+            self._pages_by_variant.append(pages)
+
+        self._has_pages = any(self._pages_by_variant)
+        self._current_page_index = 0
+        self._current_variant_index = 0
+        self._last_variant_index = 0
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def _frame(self, page: str, footer: str) -> str:
+    def _pages(self, variant_index: int) -> list[str]:
+        return self._pages_by_variant[variant_index % self._variant_count]
+
+    def _page(self, page_index: int, variant_index: int) -> str:
+        pages = self._pages(variant_index)
+        return pages[page_index % len(pages)] if pages else ""
+
+    def _frame(self, page_index: int, variant_index: int) -> str:
+        header = _variant(self._headers, variant_index)
+        footer = _variant(self._footers, variant_index)
+        page = self._page(page_index, variant_index)
         lines = []
-        if self._header:
-            lines.append(self._header)
+        if header:
+            lines.append(header)
         if page:
             lines.append(page)
         if footer:
@@ -165,7 +209,7 @@ class ChatboxRotator:
         return "\n".join(lines)
 
     def start(self) -> None:
-        if not self._pages:
+        if not self._has_pages:
             return
         self._thread = threading.Thread(target=self._run, name="ChatboxRotator", daemon=True)
         self._thread.start()
@@ -173,13 +217,17 @@ class ChatboxRotator:
     def _run(self) -> None:
         # Send the first page immediately, then cycle pages forever.
         while not self._stop_event.is_set():
-            for page in self._pages:
+            max_pages = max((len(pages) for pages in self._pages_by_variant), default=0)
+            for page_index in range(max_pages):
                 if self._stop_event.is_set():
                     return
                 with self._lock:
-                    self._current_page = page
-                    footer = self._footer
-                frame = self._frame(page, footer)
+                    variant_index = self._current_variant_index
+                    self._current_page_index = page_index
+                    self._last_variant_index = variant_index
+                    self._current_variant_index = (self._current_variant_index + 1) % self._variant_count
+                page = self._page(page_index, variant_index)
+                frame = self._frame(page_index, variant_index)
                 self._sender.send_chatbox(frame)
 
                 deadline = time.monotonic() + estimate_page_seconds(page)
@@ -190,18 +238,18 @@ class ChatboxRotator:
                     wait_seconds = min(remaining, CHATBOX_KEEPALIVE_SECONDS)
                     if self._stop_event.wait(wait_seconds):
                         return
-                    if deadline - time.monotonic() > 0:
-                        with self._lock:
-                            footer = self._footer
-                        self._sender.send_chatbox(self._frame(page, footer))
+                    with self._lock:
+                        current_page_index = self._current_page_index
+                        current_variant_index = variant_index
+                    self._sender.send_chatbox(self._frame(current_page_index, current_variant_index))
 
-    def set_footer(self, footer: str) -> None:
+    def set_footer(self, footer: TextVariants) -> None:
         """Update the footer line and re-send the current page right away."""
         with self._lock:
-            self._footer = footer or ""
-            page = self._current_page
-            current_footer = self._footer
-        self._sender.send_chatbox(self._frame(page, current_footer))
+            self._footers = _as_variants(footer)
+            page_index = self._current_page_index
+            variant_index = self._last_variant_index
+        self._sender.send_chatbox(self._frame(page_index, variant_index))
 
     def stop(self, *, clear: bool = True) -> None:
         self._stop_event.set()

@@ -85,6 +85,9 @@ print(resp.choices[0].message.content)
 请求文本超过 VRChat 144 字上限时，按逗号/句号等断句符分页，在聊天框循环翻面播放，
 直到该请求的回复返回才停止并清空。每页停留 = `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` 秒。
 ASR 正在听时会至少每 `CHATBOX_KEEPALIVE_SECONDS` 秒重发当前聊天框画面一次（默认 20，超过 20 会按 20 处理），避免消息因超时隐藏。
+OSC 模板文案现在是双语的，并由 `OSC_TEMPLATE_LANGUAGE` 控制：`english`（默认）、`chinese` 或 `rotate`。
+工具头、工具提示、监听尾标、持续循环提示都各有一套默认文案；自定义时用 `OSC_*_EN` / `OSC_*_ZH`
+与 `CONTINUE_PROMPT_EN` / `CONTINUE_PROMPT_ZH` 成对配置。
 
 ## 悬浮窗口
 
@@ -118,7 +121,8 @@ ASR 正在听时会至少每 `CHATBOX_KEEPALIVE_SECONDS` 秒重发当前聊天�
 4. 调用方执行后把结果发回。**默认直接把原始结果发到聊天框**（过长会沿用现有的分页 + 自动翻页）；
    若设 `ENABLE_TOOL_RESULT_SUMMARY=true`，则改由翻译器把结果压缩成一行(≤120 字符、英文)再显示。
 
-聊天框还有个状态尾行：正在听时显示 `[listening]`，说完立即去掉。
+聊天框还有个随语言配置变化的状态尾行：正在听时显示 `[listening]`、`[正在听]`，或在
+`OSC_TEMPLATE_LANGUAGE=rotate` 时交替显示两者；说完立即去掉。
 
 开启需要在 `.env` 设 `ENABLE_TOOL_CALLING=true` 并配好翻译器 LLM（`TOOL_LLM_BASE_URL` /
 `TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`）；缺这些会自动降级关闭。其余开关见 `.env.example`。
@@ -138,7 +142,7 @@ opencode（以及 Claude Code、Codex 等）这类 agent 都跑一个**工具循
 真人说话 ─▶ 服务器 ─▶ assistant{content, tool_calls:[continue_session]}
     ▲                                │
     │                                ▼
-聊天框："Please continue:\n[Original prompt]"  ◀─ 服务器 ◀─ agent 执行 continue_session → role:"tool":"continue"
+聊天框："Please continue:\n[Original prompt]" / "请继续：\n[Original prompt]"  ◀─ 服务器 ◀─ agent 执行 continue_session → role:"tool":"continue"
 ```
 
 这个空操作工具必须注册到你的 agent 里，它才有东西可执行。它就在
@@ -149,8 +153,9 @@ opencode（以及 Claude Code、Codex 等）这类 agent 都跑一个**工具循
 在 `.env` 设 `ENABLE_CONTINUE_LOOP=true` 开启。无论上面的**工具调用**是否开启它都能用（continue 调用不带参数，
 不经过翻译器 LLM）。默认情况下，某一轮超时且没采到任何语音时仍会发 continue 调用，让语音循环保持存活；
 如果希望空房间超时后结束循环，设 `CONTINUE_ON_TIMEOUT=false`。可用 `.env` 里的
-`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` / `CONTINUE_ON_TIMEOUT` 调整。
-`continue_session` 返回后，聊天框会在 `CONTINUE_PROMPT` 下方附带原始 user prompt，方便后续回合保留最初上下文。
+`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT_EN` / `CONTINUE_PROMPT_ZH` /
+`CONTINUE_ON_TIMEOUT` 调整。旧的 `CONTINUE_PROMPT` 仍兼容，作为英文文案别名。
+`continue_session` 返回后，聊天框会在持续循环提示下方附带原始 user prompt，方便后续回合保留最初上下文。
 
 ## 标题请求拦截
 
@@ -174,7 +179,7 @@ CodeWhale / DeepSeek TUI（标题由本地从首条消息截取）。
 | `audio_router.py` | 无缝轮转的音频路由 + 静音检测（移植） |
 | `audio_capture.py` | loopback / 麦克风 / 混音采集（移植） |
 | `stt_engine.py` | 按需 STT 引擎 + 无缝流轮转 + 事件发布 |
-| `osc_sender.py` | OSC 聊天框发送 + 分页轮播（含工具头部 / `[listening]` 尾部） |
+| `osc_sender.py` | OSC 聊天框发送 + 按语言配置的分页轮播（含工具头部 / 监听尾部） |
 | `capture.py` | 单次请求的回复捕获与结束判定 |
 | `tool_router.py` | 唤醒词识别 + 翻译器 LLM（语音意图 → tool_calls，结果摘要）+ 持续循环辅助函数 |
 | `api_server.py` | FastAPI OpenAI 兼容端点（含工具调用 + 持续循环 + 标题拦截） |

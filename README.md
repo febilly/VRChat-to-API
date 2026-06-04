@@ -86,6 +86,7 @@ The maximum wait time is capped at `CAPTURE_MAX_WAIT_SECONDS`. If there is still
 When the input request text exceeds the VRChat limit of 144 characters, it is paginated by punctuation marks (e.g., commas, periods) and displayed sequentially in a carousel loop.
 The loop stops and clears once the reply for the request starts returning. The duration for each page is calculated as: `max(CHATBOX_MIN_PAGE_SECONDS, cjk/CJK_CPS + other/LATIN_CPS)` seconds.
 While ASR is listening, the current chatbox frame is re-sent at least every `CHATBOX_KEEPALIVE_SECONDS` seconds (default 20, capped at 20) so VRChat does not hide it as stale.
+OSC template copy is bilingual and controlled by `OSC_TEMPLATE_LANGUAGE`: `english` (default), `chinese`, or `rotate`. The default English copy has a Chinese counterpart for tool headers, tool hints, listening footer, and continue prompts; customize both sides with `OSC_*_EN` / `OSC_*_ZH` and `CONTINUE_PROMPT_EN` / `CONTINUE_PROMPT_ZH`.
 
 ## Floating Overlay Window
 
@@ -125,8 +126,8 @@ How it works:
    prompt); set `ENABLE_TOOL_RESULT_SUMMARY=true` to instead have the translator condense it into a
    single line (≤120 chars, English).
 
-The chatbox also shows a status footer: `[listening]` while capturing, removed the moment the
-human stops.
+The chatbox also shows a language-aware status footer while capturing: `[listening]`, `[正在听]`,
+or alternating both when `OSC_TEMPLATE_LANGUAGE=rotate`. It is removed the moment the human stops.
 
 Enable with `ENABLE_TOOL_CALLING=true` plus a translator LLM (`TOOL_LLM_BASE_URL` /
 `TOOL_LLM_API_KEY` / `TOOL_LLM_MODEL`); missing config auto-disables it. See `.env.example`.
@@ -149,7 +150,7 @@ again and ends the agent's turn.
 human speaks ─▶ server ─▶ assistant{content, tool_calls:[continue_session]}
      ▲                                   │
      │                                   ▼
- chatbox: "Please continue:\n[Original prompt]"  ◀─ server ◀─ agent executes continue_session → role:"tool":"continue"
+ chatbox: "Please continue:\n[Original prompt]" / "请继续：\n[Original prompt]"  ◀─ server ◀─ agent executes continue_session → role:"tool":"continue"
 ```
 
 The no-op tool must be registered with your agent so it has something real to execute. It ships in
@@ -162,9 +163,10 @@ Enable with `ENABLE_CONTINUE_LOOP=true`. It works whether or not voice **Tool Ca
 (the continue call takes no arguments, so the translator LLM isn't involved). By default, a turn
 that times out with no speech still issues a continue call so the voice loop stays alive; set
 `CONTINUE_ON_TIMEOUT=false` if an empty room should end the loop. Configurable via
-`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT` / `CONTINUE_ON_TIMEOUT` in `.env`.
+`CONTINUE_TOOL_NAME` / `CONTINUE_STOP_WORDS` / `CONTINUE_PROMPT_EN` / `CONTINUE_PROMPT_ZH` /
+`CONTINUE_ON_TIMEOUT` in `.env`. The old `CONTINUE_PROMPT` is still accepted as the English alias.
 After `continue_session` returns, the chatbox prompt includes the original user prompt below
-`CONTINUE_PROMPT`, so the human keeps the initial context while driving later turns.
+the continue prompt, so the human keeps the initial context while driving later turns.
 
 ## Title-Request Interception
 
@@ -191,7 +193,7 @@ locally from the first user message).
 | `audio_router.py` | Seamlessly rotated audio routing + silence detection (ported) |
 | `audio_capture.py` | Loopback / microphone / mix capture (ported) |
 | `stt_engine.py` | On-demand STT engine + seamless stream rotation + event publishing |
-| `osc_sender.py` | OSC chatbox sender + page carousel (with tools header / `[listening]` footer) |
+| `osc_sender.py` | OSC chatbox sender + language-aware page carousel (with tools header / listening footer) |
 | `capture.py` | Single-request reply capture and end determination |
 | `tool_router.py` | Wake-word match + translator LLM (voice intent → tool_calls, result summary) + continue-loop helpers |
 | `api_server.py` | FastAPI OpenAI-compatible endpoints (incl. tool calling + continue loop + title interception) |

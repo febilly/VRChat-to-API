@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 websockets
+dashscope>=1.25.13,<1.26.0
 soundcard
 numpy<2.0.0
 requests

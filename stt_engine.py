@@ -29,6 +29,7 @@ from websockets import ConnectionClosed, ConnectionClosedOK
 from websockets.sync.client import connect as sync_connect
 
 from config import (
+    ASR_BACKEND,
     SONIOX_WEBSOCKET_URL,
     SONIOX_STREAM_DURATION_SECONDS,
     SONIOX_SLEEP_ON_SILENCE,
@@ -127,7 +128,7 @@ class _SonioxStreamState:
     silence_started_at: float = 0.0
 
 
-class STTEngine:
+class SonioxSTTEngine:
     """Continuously transcribes loopback audio and publishes transcript events."""
 
     def __init__(self):
@@ -834,3 +835,28 @@ class STTEngine:
             # nulling could clobber a freshly-started thread reference.
             self.last_disconnect_reason = disconnect_reason
             logger.info("STT engine session ended: %s", disconnect_reason)
+
+
+class STTEngine:
+    """Unified STT engine facade.
+
+    Upper layers only depend on this lifecycle/event contract:
+    start/stop/is_running, healthy, last_disconnect_reason, and transcript
+    events with type=final|partial|endpoint.
+    """
+
+    def __init__(self, backend: str | None = None):
+        selected = (backend or ASR_BACKEND or "soniox").strip().lower()
+        if selected == "soniox":
+            self.backend = "soniox"
+            self._impl = SonioxSTTEngine()
+        elif selected == "qwen":
+            from qwen_stt_engine import QwenSTTEngine
+
+            self.backend = "qwen"
+            self._impl = QwenSTTEngine()
+        else:
+            raise ValueError(f"Unsupported ASR backend: {selected}")
+
+    def __getattr__(self, name: str):
+        return getattr(self._impl, name)

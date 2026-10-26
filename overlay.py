@@ -11,7 +11,7 @@ Event shapes consumed by push():
     {"type": "request_end",   "reply":  <str>}   # request finished; final reply
     {"type": "partial",  "text": <str>}          # live (non-final) hypothesis
     {"type": "final",    "text": <str>}          # newly finalized text
-    {"type": "endpoint"}                          # Soniox endpoint detected
+    {"type": "endpoint"}                          # ASR endpoint detected
 """
 import queue
 import sys

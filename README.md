@@ -5,7 +5,7 @@
 Turn a real human in VRChat into an OpenAI-compatible API.
 
 Upon receiving a `chat/completions` request, it takes the **last user message** and sends it to the VRChat chatbox via OSC;
-It then captures the speech of other players (from the system audio) using Soniox real-time speech-to-text (STT) and returns it as the API response.
+It then captures the speech of other players (from the system audio) using the selected real-time speech-to-text (STT) backend and returns it as the API response. Supported ASR backends are Soniox and Qwen ASR.
 
 ## Workflow
 
@@ -29,7 +29,10 @@ pip install -r requirements.txt
 copy .env.example .env   # Then edit .env
 ```
 
-At minimum, `.env` needs to be configured with Soniox: fill in `SONIOX_API_KEY` (permanent key) **or** `SONIOX_TEMP_KEY_URL` (temporary key URL).
+At minimum, choose one ASR backend in `.env`:
+
+- `ASR_BACKEND=soniox`: set `SONIOX_API_KEY` (permanent key) **or** `SONIOX_TEMP_KEY_URL` (temporary key URL).
+- `ASR_BACKEND=qwen`: set `DASHSCOPE_API_KEY`.
 
 ## Running
 
@@ -75,10 +78,10 @@ Any OpenAI-compatible frontend (such as SillyTavern) can be used by pointing its
 ## Reply End Determination
 
 A reply for a request ends when **both** of the following conditions are met:
-1. **Soniox Endpoint Detection**: An endpoint signal is detected (which includes the `endpoint_detected` flag **or** the `<end>` token).
+1. **ASR Endpoint Detection**: The selected ASR backend reports an endpoint.
 2. **Silence Duration**: Silence lasts for at least `CAPTURE_MIN_SILENCE_SECONDS`.
 
-Fallback: If Soniox never sends an endpoint signal (which can happen under continuous loopback noise), the API will still return if silence exceeds `CAPTURE_SILENCE_FALLBACK_SECONDS` (default is 4s), preventing it from waiting indefinitely.
+Fallback: If the ASR backend never sends an endpoint signal (which can happen under continuous loopback noise), the API will still return if silence exceeds `CAPTURE_SILENCE_FALLBACK_SECONDS` (default is 4s), preventing it from waiting indefinitely.
 The maximum wait time is capped at `CAPTURE_MAX_WAIT_SECONDS`. If there is still no reply, `CAPTURE_NO_REPLY_MESSAGE` will be returned.
 
 ## Chatbox Carousel for Long Messages
@@ -190,9 +193,10 @@ locally from the first user message).
 |------|-------------|
 | `config.py` | Configuration (reads from environment variables) |
 | `soniox_client.py` | Temporary/Permanent key acquisition + STT configuration |
+| `qwen_stt_engine.py` | Qwen realtime ASR backend adapter |
 | `audio_router.py` | Seamlessly rotated audio routing + silence detection (ported) |
 | `audio_capture.py` | Loopback / microphone / mix capture (ported) |
-| `stt_engine.py` | On-demand STT engine + seamless stream rotation + event publishing |
+| `stt_engine.py` | Unified STT facade + Soniox backend implementation |
 | `osc_sender.py` | OSC chatbox sender + language-aware page carousel (with tools header / listening footer) |
 | `capture.py` | Single-request reply capture and end determination |
 | `tool_router.py` | Wake-word match + translator LLM (voice intent → tool_calls, result summary) + continue-loop helpers |

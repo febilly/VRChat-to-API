@@ -3,7 +3,7 @@
 把 VRChat 里的真人「变成」一个 OpenAI 兼容的 API。
 
 收到 `chat/completions` 请求后，取**最后一条 user 消息**通过 OSC 发到 VRChat 聊天框；
-然后用 Soniox 实时语音识别捕获（系统音频里）别人说的话，作为 API 的返回结果。
+然后用选定的实时语音识别后端捕获（系统音频里）别人说的话，作为 API 的返回结果。目前支持 Soniox 和千问 ASR。
 
 ## 工作流程
 
@@ -27,7 +27,10 @@ pip install -r requirements.txt
 copy .env.example .env   # 然后编辑 .env
 ```
 
-`.env` 至少要配 Soniox：填 `SONIOX_API_KEY`（永久 key）**或** `SONIOX_TEMP_KEY_URL`（临时 key ）。
+`.env` 至少要选择并配置一个 ASR 后端：
+
+- `ASR_BACKEND=soniox`：填 `SONIOX_API_KEY`（永久 key）**或** `SONIOX_TEMP_KEY_URL`（临时 key）。
+- `ASR_BACKEND=qwen`：填 `DASHSCOPE_API_KEY`。
 
 ## 运行
 
@@ -73,10 +76,9 @@ print(resp.choices[0].message.content)
 
 ## 回复结束判定
 
-一次请求的回复在**同时满足**「Soniox 端点检测」（端点信号包括 `endpoint_detected` 标志
-**或** `<end>` token）与「静音 ≥ `CAPTURE_MIN_SILENCE_SECONDS`」时结束。
+一次请求的回复在**同时满足**「ASR 后端报告端点」与「静音 ≥ `CAPTURE_MIN_SILENCE_SECONDS`」时结束。
 
-兜底：若 Soniox 始终不发端点（连续 loopback 噪声下可能发生），讲完后静音超过
+兜底：若 ASR 后端始终不发端点（连续 loopback 噪声下可能发生），讲完后静音超过
 `CAPTURE_SILENCE_FALLBACK_SECONDS`（默认 4s）也会返回，避免一直干等到上限。
 最长等待 `CAPTURE_MAX_WAIT_SECONDS`，仍无人回复则返回 `CAPTURE_NO_REPLY_MESSAGE`。
 
@@ -176,9 +178,10 @@ CodeWhale / DeepSeek TUI（标题由本地从首条消息截取）。
 |------|------|
 | `config.py` | 配置（env 读取） |
 | `soniox_client.py` | 临时/永久 key 获取 + STT config |
+| `qwen_stt_engine.py` | 千问实时 ASR 后端适配 |
 | `audio_router.py` | 无缝轮转的音频路由 + 静音检测（移植） |
 | `audio_capture.py` | loopback / 麦克风 / 混音采集（移植） |
-| `stt_engine.py` | 按需 STT 引擎 + 无缝流轮转 + 事件发布 |
+| `stt_engine.py` | 统一 STT 外观 + Soniox 后端实现 |
 | `osc_sender.py` | OSC 聊天框发送 + 按语言配置的分页轮播（含工具头部 / 监听尾部） |
 | `capture.py` | 单次请求的回复捕获与结束判定 |
 | `tool_router.py` | 唤醒词识别 + 翻译器 LLM（语音意图 → tool_calls，结果摘要）+ 持续循环辅助函数 |

@@ -67,6 +67,15 @@ def _env_str(name: str, default: str) -> str:
 
 
 # ----------------------------------------------------------------------------
+# STT backend selection
+# ----------------------------------------------------------------------------
+_ASR_BACKEND_RAW = _env_str("ASR_BACKEND", "soniox").strip().lower()
+ASR_BACKEND = _ASR_BACKEND_RAW if _ASR_BACKEND_RAW in ("soniox", "qwen") else "soniox"
+if ASR_BACKEND != _ASR_BACKEND_RAW:
+    print(f"⚠️  Invalid ASR_BACKEND: {_ASR_BACKEND_RAW}, fallback to: soniox")
+
+
+# ----------------------------------------------------------------------------
 # Soniox STT
 # ----------------------------------------------------------------------------
 SONIOX_WEBSOCKET_URL = _env_str("SONIOX_WEBSOCKET_URL", "wss://stt-rt.soniox.com/transcribe-websocket")
@@ -96,6 +105,22 @@ LANGUAGE_HINTS = [c.strip() for c in _LANG_HINTS_RAW.split(",") if c.strip()]
 # Audio format streamed to Soniox.
 SAMPLE_RATE = _env_int("SAMPLE_RATE", 16000)
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 3840)
+
+
+# ----------------------------------------------------------------------------
+# Qwen ASR (DashScope realtime)
+# ----------------------------------------------------------------------------
+QWEN_ASR_MODEL = _env_str("QWEN_ASR_MODEL", "qwen3-asr-flash-realtime-2026-02-10").strip()
+QWEN_ASR_URL = _env_str("QWEN_ASR_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/realtime").strip()
+QWEN_ASR_URL_INTERNATIONAL = _env_str(
+    "QWEN_ASR_URL_INTERNATIONAL",
+    "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime",
+).strip()
+QWEN_ASR_USE_INTERNATIONAL = _env_bool("QWEN_ASR_USE_INTERNATIONAL", False)
+QWEN_ASR_LANGUAGE = _env_str("QWEN_ASR_LANGUAGE", "auto").strip().lower()
+QWEN_ASR_ENABLE_VAD = _env_bool("QWEN_ASR_ENABLE_VAD", True)
+QWEN_ASR_VAD_THRESHOLD = _env_float("QWEN_ASR_VAD_THRESHOLD", 0.2)
+QWEN_ASR_VAD_SILENCE_DURATION_MS = max(200, _env_int("QWEN_ASR_VAD_SILENCE_DURATION_MS", 800))
 
 
 # ----------------------------------------------------------------------------
@@ -177,7 +202,7 @@ OSC_LISTENING_FOOTER_ZH = _env_str("OSC_LISTENING_FOOTER_ZH", "[正在听]").str
 CAPTURE_MIN_SILENCE_SECONDS = max(0.0, _env_float("CAPTURE_MIN_SILENCE_SECONDS", 1.5))
 CAPTURE_MAX_WAIT_SECONDS = max(1.0, _env_float("CAPTURE_MAX_WAIT_SECONDS", 45.0))
 CAPTURE_NO_REPLY_MESSAGE = _env_str("CAPTURE_NO_REPLY_MESSAGE", "（对方没有回复）")
-# Safety net: complete even if Soniox never fires an endpoint, once speech has
+# Safety net: complete even if the ASR backend never fires an endpoint, once speech has
 # been heard and silence has lasted this long. Prevents hanging until max_wait.
 CAPTURE_SILENCE_FALLBACK_SECONDS = max(0.0, _env_float("CAPTURE_SILENCE_FALLBACK_SECONDS", 4.0))
 # How long to wait for the on-demand STT stream to connect when a request starts.
@@ -321,24 +346,38 @@ TITLE_REQUEST_PATTERNS = [
 # ----------------------------------------------------------------------------
 # Hard validation
 # ----------------------------------------------------------------------------
-if not os.environ.get("SONIOX_API_KEY") and not SONIOX_TEMP_KEY_URL:
+if ASR_BACKEND == "soniox" and not os.environ.get("SONIOX_API_KEY") and not SONIOX_TEMP_KEY_URL:
     print(
         "❌ Configuration error: neither SONIOX_API_KEY nor SONIOX_TEMP_KEY_URL is set.\n"
         "Please set one of them in your environment or in the .env file."
+    )
+    sys.exit(1)
+if ASR_BACKEND == "qwen" and not os.environ.get("DASHSCOPE_API_KEY"):
+    print(
+        "❌ Configuration error: ASR_BACKEND=qwen but DASHSCOPE_API_KEY is not set.\n"
+        "Please set DASHSCOPE_API_KEY in your environment or in the .env file."
     )
     sys.exit(1)
 
 
 def describe() -> str:
     """One-line human-readable summary for startup logging."""
-    rollover = (
-        f"{SONIOX_STREAM_DURATION_SECONDS:.0f}s" if SONIOX_STREAM_DURATION_SECONDS else "off"
-    )
+    if ASR_BACKEND == "soniox":
+        asr_detail = (
+            f"soniox, rollover="
+            f"{SONIOX_STREAM_DURATION_SECONDS:.0f}s" if SONIOX_STREAM_DURATION_SECONDS else "soniox, rollover=off"
+        )
+        asr_detail += f", diarization={ENABLE_SPEAKER_DIARIZATION}"
+    else:
+        endpoint = "intl" if QWEN_ASR_USE_INTERNATIONAL else "cn"
+        asr_detail = (
+            f"qwen(model={QWEN_ASR_MODEL}, endpoint={endpoint}, "
+            f"vad={'on' if QWEN_ASR_ENABLE_VAD else 'off'})"
+        )
     return (
-        f"audio={AUDIO_SOURCE}"
+        f"asr={asr_detail}, audio={AUDIO_SOURCE}"
         + (f"(device={LOOPBACK_DEVICE_NAME})" if LOOPBACK_DEVICE_NAME else "")
-        + f", rollover={rollover}, diarization={ENABLE_SPEAKER_DIARIZATION}, "
-        f"min_silence={CAPTURE_MIN_SILENCE_SECONDS}s, max_wait={CAPTURE_MAX_WAIT_SECONDS}s, "
+        + f", min_silence={CAPTURE_MIN_SILENCE_SECONDS}s, max_wait={CAPTURE_MAX_WAIT_SECONDS}s, "
         f"tools={'on' if ENABLE_TOOL_CALLING else 'off'}, "
         f"loop={'on' if ENABLE_CONTINUE_LOOP else 'off'}, "
         f"title_intercept={'on' if INTERCEPT_TITLE_REQUESTS else 'off'}"
